@@ -1,0 +1,11 @@
+[
+  {
+    "Name": "PakSuzuki.WebApi",
+    "Projects": [
+      {
+        "Path": "src\\Presentation\\PakSuzuki.WebApi\\PakSuzuki.WebApi.csproj",
+        "Action": "Start"
+      }
+    ]
+  }
+]

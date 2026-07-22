@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { @apply antialiased; }
+  body {
+    @apply font-sans text-suzuki-ink bg-suzuki-mist;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 100% -20%, rgba(126, 182, 232, 0.18), transparent),
+      radial-gradient(ellipse 60% 40% at 0% 100%, rgba(227, 6, 19, 0.04), transparent);
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .nav-item {
+    @apply flex flex-col items-center gap-1 px-3 py-2 text-[11px] font-semibold tracking-wide text-suzuki-mute
+      border-b-[3px] border-transparent transition-colors;
+  }
+  .nav-item-active {
+    @apply text-suzuki-red border-suzuki-red;
+  }
+  .stat-arrow {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/20 text-current;
+  }
+}

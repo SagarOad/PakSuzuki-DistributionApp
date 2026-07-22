@@ -1,0 +1,24 @@
+## .NET
+bin/
+obj/
+*.user
+.vs/
+appsettings.*.local.json
+
+## React / Node
+client/node_modules/
+client/dist/
+
+## Embedded SPA build output inside the API project
+src/Presentation/PakSuzuki.WebApi/wwwroot/*
+!src/Presentation/PakSuzuki.WebApi/wwwroot/.gitkeep
+
+## Logs / uploads / local email previews
+logs/
+src/Presentation/PakSuzuki.WebApi/wwwroot/uploads/
+src/Presentation/PakSuzuki.WebApi/email-outbox/
+
+## Secrets
+*.pfx
+.env
+.env.local
