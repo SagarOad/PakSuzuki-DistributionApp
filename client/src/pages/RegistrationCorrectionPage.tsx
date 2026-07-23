@@ -124,9 +124,9 @@ export default function RegistrationCorrectionPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-suzuki-mist">
-      <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-suzuki-line">
-        <SuzukiLogo />
-        <EcstarLogo />
+      <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 bg-white border-b border-suzuki-line">
+        <SuzukiLogo className="h-7 max-w-[100px] sm:h-9 sm:max-w-[140px]" />
+        <EcstarLogo className="hidden sm:block h-7 max-w-[120px] sm:h-9 sm:max-w-[140px]" />
       </div>
 
       <div className="flex-1 max-w-2xl w-full mx-auto px-4 py-8">

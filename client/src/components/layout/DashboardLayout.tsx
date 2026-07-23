@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Truck, Package, Store, ShoppingBasket,
-  UsersRound, MoreHorizontal, Bell, LogOut
+  UsersRound, Bell, LogOut, CircleEllipsis
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { SuzukiLogo, EcstarLogo } from '@/components/brand/Logos'
@@ -15,7 +15,7 @@ const allNavItems = [
   { to: '/shop', label: 'Shop', icon: Store, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
   { to: '/orders', label: 'Orders', icon: ShoppingBasket, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
   { to: '/claims', label: 'Claims', icon: UsersRound, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
-  { to: '/more', label: 'More', icon: MoreHorizontal, roles: ['SuperAdmin', 'Admin', 'Distributor'] }
+  { to: '/more', label: 'More', icon: CircleEllipsis, roles: ['SuperAdmin', 'Admin', 'Distributor'] }
 ]
 
 export default function DashboardLayout() {
@@ -24,21 +24,21 @@ export default function DashboardLayout() {
   const navItems = allNavItems.filter((item) => !role || item.roles.includes(role))
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col overflow-x-hidden">
       <header className="sticky top-0 z-40 bg-white border-b border-suzuki-line shadow-sm">
-        <div className="mx-auto max-w-[1440px] px-4 lg:px-6 h-[72px] flex items-center gap-4">
+        <div className="mx-auto max-w-[1440px] px-3 sm:px-4 lg:px-6 h-[64px] sm:h-[72px] flex items-center gap-2 sm:gap-3 lg:gap-4">
           <button type="button" onClick={() => navigate('/')} className="shrink-0" aria-label="Home">
-            <SuzukiLogo className="h-10" />
+            <SuzukiLogo className="h-6 max-w-[80px] sm:h-7 sm:max-w-[100px] lg:h-8 lg:max-w-[120px]" />
           </button>
 
-          <nav className="flex-1 flex items-end justify-center gap-0.5 overflow-x-auto scrollbar-none min-h-[56px] pt-2">
+          <nav className="flex-1 min-w-0 flex items-end justify-start sm:justify-center gap-0 overflow-x-auto scrollbar-none min-h-[52px] sm:min-h-[56px] pt-2">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.end}
                 className={({ isActive }) =>
-                  clsx('nav-item min-w-[72px]', isActive && 'nav-item-active')
+                  clsx('nav-item shrink-0 min-w-[52px] md:min-w-[72px]', isActive && 'nav-item-active')
                 }
               >
                 {({ isActive }) => (
@@ -48,22 +48,22 @@ export default function DashboardLayout() {
                       strokeWidth={isActive ? 2.4 : 1.8}
                       className={isActive ? 'text-suzuki-red' : 'text-suzuki-mute'}
                     />
-                    <span>{item.label}</span>
+                    <span className="hidden md:inline">{item.label}</span>
                   </>
                 )}
               </NavLink>
             ))}
 
-            <button type="button" className="nav-item min-w-[64px]" aria-label="Notifications">
+            <button type="button" className="nav-item shrink-0 min-w-[52px] md:min-w-[64px]" aria-label="Notifications">
               <Bell size={20} className="text-suzuki-mute" />
-              <span>Alerts</span>
+              <span className="hidden md:inline">Notifications</span>
             </button>
           </nav>
 
-          <div className="shrink-0 flex items-center gap-4">
-            <EcstarLogo className="h-10" />
-            <div className="hidden md:flex flex-col items-end border-l border-suzuki-line pl-4">
-              <span className="text-xs font-semibold text-suzuki-ink truncate max-w-[140px]">{userName}</span>
+          <div className="shrink-0 flex items-center gap-2 sm:gap-3 lg:gap-4">
+            <EcstarLogo className="hidden lg:block h-8 max-w-[120px]" />
+            <div className="hidden md:flex flex-col border-l border-suzuki-line pl-3 lg:pl-4 justify-center">
+              <span className="text-xs font-semibold text-suzuki-ink truncate max-w-[100px] lg:max-w-[120px]">{userName}</span>
               <span className="text-[10px] font-medium text-suzuki-mute uppercase tracking-wider">{role}</span>
             </div>
             <button
@@ -78,7 +78,7 @@ export default function DashboardLayout() {
         </div>
       </header>
 
-      <main className="flex-1 mx-auto w-full max-w-[1440px] px-4 lg:px-6 py-5">
+      <main className="flex-1 mx-auto w-full max-w-[1440px] px-3 sm:px-4 lg:px-6 py-4 sm:py-5 min-w-0">
         <Outlet />
       </main>
 

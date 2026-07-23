@@ -109,10 +109,10 @@ export default function MapViewPage() {
     <div className="space-y-4">
       <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-5 min-h-[calc(100vh-180px)]">
         {/* Sidebar list */}
-        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card flex flex-col overflow-hidden min-h-[520px]">
+        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card flex flex-col overflow-hidden min-h-[360px] xl:min-h-[520px]">
           <div className="p-5 border-b border-suzuki-line">
-            <h1 className="text-2xl font-extrabold text-suzuki-navy">Map View</h1>
-            <div className="mt-4 flex gap-2">
+            <h1 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">Map View</h1>
+            <div className="mt-4 flex flex-wrap gap-2">
               {([
                 ['all', 'All'],
                 ['distributor', 'Distributor'],
@@ -134,7 +134,7 @@ export default function MapViewPage() {
               ))}
             </div>
 
-            <div className="mt-3">
+            {/* <div className="mt-3">
               <select
                 value={regionId}
                 onChange={(e) => setRegionId(e.target.value)}
@@ -145,7 +145,7 @@ export default function MapViewPage() {
                   <option key={r.id} value={r.id}>{r.name}</option>
                 ))}
               </select>
-            </div>
+            </div> */}
 
             <div className="mt-3 flex items-center gap-2 rounded-xl border border-suzuki-line bg-suzuki-mist px-3 py-2.5">
               <Search size={16} className="text-suzuki-mute shrink-0" />
@@ -219,7 +219,7 @@ export default function MapViewPage() {
         </section>
 
         {/* Bird eye map */}
-        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden flex flex-col min-h-[520px]">
+        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden flex flex-col min-h-[360px] xl:min-h-[520px]">
           <div className="px-5 py-4 border-b border-suzuki-line flex items-center justify-between gap-3">
             <h2 className="text-xl font-extrabold text-suzuki-navy">Bird Eye View</h2>
             {role === 'Distributor' && (
@@ -227,7 +227,7 @@ export default function MapViewPage() {
             )}
           </div>
 
-          <div className="relative flex-1 min-h-[460px]">
+          <div className="relative flex-1 min-h-[280px] sm:min-h-[360px] xl:min-h-[460px]">
             <MapContainer
               center={mapCenter}
               zoom={selected ? 12 : 6}
@@ -255,7 +255,7 @@ export default function MapViewPage() {
             </MapContainer>
 
             {/* City badge */}
-            <div className="pointer-events-none absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2 z-[400]">
+            <div className="pointer-events-none absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2 z-[400] hidden md:block">
               <div className="rounded-full bg-suzuki-red text-white text-sm font-extrabold px-5 py-2 shadow-lg">
                 {cityLabel}
               </div>
@@ -263,7 +263,7 @@ export default function MapViewPage() {
 
             {/* Floating profile card */}
             {selected && (
-              <div className="absolute right-4 bottom-4 z-[500] w-[min(100%-2rem,340px)] bg-white rounded-2xl border border-suzuki-line shadow-card p-4">
+              <div className="absolute left-3 right-3 bottom-3 sm:left-auto sm:right-4 sm:bottom-4 z-[500] sm:w-[min(100%-2rem,340px)] bg-white rounded-2xl border border-suzuki-line shadow-card p-4">
                 <div className="flex gap-3">
                   <div className="h-12 w-12 rounded-xl bg-suzuki-red flex items-center justify-center shrink-0">
                     {selected.kind === 'Distributor'

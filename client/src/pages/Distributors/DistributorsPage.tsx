@@ -1,13 +1,17 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import {
-  Truck, UserPlus, Search, Eye, Trash2, Check, X, RefreshCcw,
-  FileSpreadsheet, ChevronLeft, ChevronRight
-} from 'lucide-react'
+import { Eye, Trash2, Check, X, RefreshCcw, Truck, UserPlus } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
-import { CompactStatCard, CompactStatRow } from '@/components/ui/CompactStatCards'
+import { StatCard, StatCardRow } from '@/components/ui/StatCard'
+import {
+  DataTable,
+  ExportExcelButton,
+  ListTabPill,
+  FilterSelect,
+  DateFilterField
+} from '@/components/ui/DataTable'
 import { RequestActionButton, SendForCorrectionModal } from '@/components/ui/SendForCorrectionModal'
 import clsx from 'clsx'
 
@@ -56,6 +60,9 @@ export default function DistributorsPage() {
   const tab = (params.get('tab') === 'requests' ? 'requests' : 'list') as Tab
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
   const [correctionId, setCorrectionId] = useState<string | null>(null)
   const [correctionRemarks, setCorrectionRemarks] = useState('')
 
@@ -117,6 +124,23 @@ export default function DistributorsPage() {
   const rows = tab === 'list' ? listQuery.data : pendingQuery.data
   const loading = tab === 'list' ? listQuery.isLoading : pendingQuery.isLoading
   const queryError = tab === 'list' ? listQuery.isError : pendingQuery.isError
+
+  const visibleItems = useMemo(() => {
+    let items = rows?.items ?? []
+    if (statusFilter === 'active') items = items.filter((d) => d.isActive)
+    else if (statusFilter === 'pending') items = items.filter((d) => d.approvalStatus === 'PendingReview')
+    if (fromDate) {
+      const from = new Date(fromDate)
+      items = items.filter((d) => new Date(d.createdAtUtc) >= from)
+    }
+    if (toDate) {
+      const to = new Date(toDate)
+      to.setHours(23, 59, 59, 999)
+      items = items.filter((d) => new Date(d.createdAtUtc) <= to)
+    }
+    return items
+  }, [rows?.items, statusFilter, fromDate, toDate])
+
   const filteredHint = useMemo(() => {
     if (!rows) return 'Showing 00 to 00 of 00 entries'
     const start = rows.totalCount === 0 ? 0 : (rows.pageNumber - 1) * 10 + 1
@@ -132,8 +156,6 @@ export default function DistributorsPage() {
     )
   }
 
-  const totalDistributors = statsQuery.data?.totalDistributors ?? listQuery.data?.totalCount ?? '—'
-  const pendingDistributors = statsQuery.data?.pendingDistributorApprovals ?? pendingQuery.data?.totalCount ?? '—'
   const correctionSubject = correctionDetailQuery.data
     ? {
         id: correctionDetailQuery.data.id,
@@ -146,9 +168,12 @@ export default function DistributorsPage() {
       }
     : null
 
+  const totalDistributors = statsQuery.data?.totalDistributors ?? listQuery.data?.totalCount ?? '—'
+  const pendingDistributors = statsQuery.data?.pendingDistributorApprovals ?? pendingQuery.data?.totalCount ?? '—'
+
   return (
-    <div className="space-y-5">
-      <h1 className="text-2xl font-extrabold text-suzuki-navy">Distributors</h1>
+    <div className="space-y-4">
+      <h1 className="text-2xl sm:text-[30px] font-extrabold text-[#0B2E59] tracking-tight">Distributors List</h1>
 
       {(queryError || approve.isError) && (
         <div className="rounded-xl border border-suzuki-red/30 bg-red-50 px-4 py-3 text-sm text-suzuki-red">
@@ -158,156 +183,135 @@ export default function DistributorsPage() {
         </div>
       )}
 
-      <CompactStatRow>
-        <CompactStatCard
+      <StatCardRow>
+        <StatCard
           tone="navy"
           icon={<Truck size={22} />}
           value={totalDistributors}
           label="Total Distributors"
           onClick={() => setTab('list')}
         />
-        <CompactStatCard
+        <StatCard
           tone="request-red"
           icon={<UserPlus size={22} />}
           value={pendingDistributors}
           label="Distributor Requests"
           onClick={() => setTab('requests')}
         />
-      </CompactStatRow>
+      </StatCardRow>
 
-      <div>
-        <h2 className="text-lg font-bold text-suzuki-navy mb-3">Distributor List</h2>
-        <div className="flex gap-2">
-          <TabPill active={tab === 'list'} onClick={() => setTab('list')}>Distributors</TabPill>
-          <TabPill active={tab === 'requests'} onClick={() => setTab('requests')}>
-            Distributor Requests
-          </TabPill>
-        </div>
+      <div className="flex flex-wrap gap-2.5 pt-1">
+        <ListTabPill active={tab === 'list'} onClick={() => setTab('list')}>
+          Distributors
+        </ListTabPill>
+        <ListTabPill active={tab === 'requests'} onClick={() => setTab('requests')}>
+          Distributors Requests
+        </ListTabPill>
       </div>
 
-      <div className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden">
-        <div className="px-5 pt-5 pb-3 flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
-          <h3 className="font-bold text-suzuki-navy">
-            {tab === 'list' ? 'Distributor Log' : 'Distributor Requests'}
-          </h3>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 bg-suzuki-mist rounded-lg px-3 py-2 border border-suzuki-line">
-              <Search size={14} className="text-suzuki-mute" />
-              <input
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-                placeholder="Search"
-                className="bg-transparent text-sm outline-none w-36"
+      <div className="pt-1">
+        <DataTable
+          title={tab === 'list' ? 'Distributors List' : 'Distributor Requests'}
+          search={search}
+          onSearchChange={(v) => { setSearch(v); setPage(1) }}
+          filterBar={
+            <>
+              <FilterSelect
+                value={statusFilter}
+                onChange={(v) => { setStatusFilter(v); setPage(1) }}
+                options={[
+                  { value: 'all', label: 'All Distributors' },
+                  { value: 'active', label: 'Active' },
+                  { value: 'pending', label: 'Pending' }
+                ]}
               />
-            </div>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-line px-3 py-2 text-xs font-semibold text-suzuki-blue hover:bg-suzuki-ice"
-            >
-              <FileSpreadsheet size={14} /> Export Excel
-            </button>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-suzuki-mist/80 text-left text-xs font-bold uppercase tracking-wide text-suzuki-mute">
-                <th className="px-5 py-3">Distributor Name</th>
-                <th className="px-4 py-3">Contact Number</th>
-                <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Location</th>
-                <th className="px-4 py-3">{tab === 'requests' ? 'Address' : 'Business'}</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-5 py-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-suzuki-mute">Loading…</td>
-                </tr>
-              )}
-              {!loading && (rows?.items.length ?? 0) === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-suzuki-mute">
-                    {tab === 'requests' ? 'No pending distributor requests.' : 'No distributors found.'}
-                  </td>
-                </tr>
-              )}
-              {rows?.items.map((d) => (
-                <tr key={d.id} className="border-t border-suzuki-line/80 hover:bg-suzuki-mist/40">
-                  <td className="px-5 py-3.5 font-semibold text-suzuki-ink">{d.name}</td>
-                  <td className="px-4 py-3.5 text-suzuki-mute">{d.mobileNumber}</td>
-                  <td className="px-4 py-3.5 text-suzuki-mute">{d.email}</td>
-                  <td className="px-4 py-3.5 text-suzuki-mute">{d.regionName}</td>
-                  <td className="px-4 py-3.5 text-suzuki-mute max-w-[180px] truncate">{d.businessName}</td>
-                  <td className="px-4 py-3.5">
-                    <StatusPill
-                      status={
-                        tab === 'list'
-                          ? (d.isActive ? 'Active' : d.approvalStatus)
-                          : (d.approvalStatus === 'PendingReview' ? 'Pending' : d.approvalStatus)
-                      }
-                    />
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <div className="flex justify-end gap-1.5">
+              <span className="text-sm font-semibold text-[#0B2E59]">From</span>
+              <DateFilterField value={fromDate} onChange={setFromDate} />
+              <span className="text-sm font-semibold text-[#0B2E59]">To</span>
+              <DateFilterField value={toDate} onChange={setToDate} />
+            </>
+          }
+          toolbarActions={<ExportExcelButton />}
+          columns={[
+            { key: 'name', header: 'Distributor Name', wide: true },
+            { key: 'contact', header: 'Contact Number' },
+            { key: 'email', header: 'Email' },
+            { key: 'location', header: 'Location', wide: true },
+            { key: 'address', header: 'Address', wide: true },
+            { key: 'status', header: 'Distributor Status' },
+            { key: 'action', header: 'Action', align: 'right' }
+          ]}
+          loading={loading}
+          empty={tab === 'requests' ? 'No pending distributor requests.' : 'No distributors found.'}
+          pagination={{
+            page: rows?.pageNumber ?? 1,
+            totalPages: Math.max(rows?.totalPages ?? 1, 1),
+            onChange: setPage,
+            showingText: filteredHint
+          }}
+        >
+          {visibleItems.map((d) => (
+            <tr key={d.id} className="border-b border-[#E2E4EA]/80 hover:bg-[#F5F7FB]/60">
+              <td className="pl-4 pr-3 py-3.5 font-semibold text-[#0B2E59]">{d.name}</td>
+              <td className="px-3 py-3.5 text-[#64748B]">{d.mobileNumber}</td>
+              <td className="px-3 py-3.5 text-[#64748B]">{d.email}</td>
+              <td className="px-3 py-3.5 text-[#64748B]">{d.regionName}</td>
+              <td className="px-3 py-3.5 text-[#64748B] max-w-[180px] truncate">{d.businessName}</td>
+              <td className="px-3 py-3.5">
+                <StatusPill
+                  status={
+                    tab === 'list'
+                      ? (d.isActive ? 'Active' : d.approvalStatus)
+                      : (d.approvalStatus === 'PendingReview' ? 'Pending' : d.approvalStatus)
+                  }
+                />
+              </td>
+              <td className="pl-3 pr-4 py-3.5">
+                <div className="flex justify-end gap-1.5">
+                  <RequestActionButton
+                    tone="view"
+                    title="View"
+                    onClick={() => navigate(`/distributors/${d.id}`)}
+                  >
+                    <Eye size={15} />
+                  </RequestActionButton>
+                  {tab === 'requests' ? (
+                    <>
                       <RequestActionButton
-                        tone="view"
-                        title="View"
-                        onClick={() => navigate(`/distributors/${d.id}`)}
+                        tone="approve"
+                        title="Approve"
+                        onClick={() => approve.mutate({ id: d.id, decision: 'Approved' })}
                       >
-                        <Eye size={15} />
+                        <Check size={15} strokeWidth={2.5} />
                       </RequestActionButton>
-                      {tab === 'requests' ? (
-                        <>
-                          <RequestActionButton
-                            tone="approve"
-                            title="Approve"
-                            onClick={() => approve.mutate({ id: d.id, decision: 'Approved' })}
-                          >
-                            <Check size={15} strokeWidth={2.5} />
-                          </RequestActionButton>
-                          <RequestActionButton
-                            tone="reject"
-                            title="Reject"
-                            onClick={() => approve.mutate({ id: d.id, decision: 'Rejected' })}
-                          >
-                            <X size={15} strokeWidth={2.5} />
-                          </RequestActionButton>
-                          <RequestActionButton
-                            tone="correct"
-                            title="Send for Correction"
-                            onClick={() => {
-                              setCorrectionRemarks('')
-                              setCorrectionId(d.id)
-                            }}
-                          >
-                            <RefreshCcw size={14} strokeWidth={2.5} />
-                          </RequestActionButton>
-                        </>
-                      ) : (
-                        <RequestActionButton tone="view" title="Remove" onClick={() => undefined}>
-                          <Trash2 size={15} />
-                        </RequestActionButton>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="px-5 py-4 border-t border-suzuki-line flex flex-col sm:flex-row gap-3 items-center justify-between text-xs text-suzuki-mute">
-          <span>{filteredHint}</span>
-          <Pagination
-            page={rows?.pageNumber ?? 1}
-            totalPages={Math.max(rows?.totalPages ?? 1, 1)}
-            onChange={setPage}
-          />
-        </div>
+                      <RequestActionButton
+                        tone="reject"
+                        title="Reject"
+                        onClick={() => approve.mutate({ id: d.id, decision: 'Rejected' })}
+                      >
+                        <X size={15} strokeWidth={2.5} />
+                      </RequestActionButton>
+                      <RequestActionButton
+                        tone="correct"
+                        title="Send for Correction"
+                        onClick={() => {
+                          setCorrectionRemarks('')
+                          setCorrectionId(d.id)
+                        }}
+                      >
+                        <RefreshCcw size={14} strokeWidth={2.5} />
+                      </RequestActionButton>
+                    </>
+                  ) : (
+                    <RequestActionButton tone="view" title="Remove" onClick={() => undefined}>
+                      <Trash2 size={15} />
+                    </RequestActionButton>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </DataTable>
       </div>
 
       {correctionId && (
@@ -334,27 +338,6 @@ export default function DistributorsPage() {
   )
 }
 
-function TabPill({
-  active, onClick, children
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={clsx(
-        'rounded-xl px-5 py-2.5 text-sm font-bold transition-colors',
-        active ? 'bg-suzuki-red text-white shadow-card' : 'bg-white text-suzuki-ink border border-suzuki-line hover:bg-suzuki-mist'
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
 function StatusPill({ status }: { status: string }) {
   const ok = status === 'Active' || status === 'Approved'
   const bad = status === 'Rejected'
@@ -371,48 +354,5 @@ function StatusPill({ status }: { status: string }) {
     >
       {status}
     </span>
-  )
-}
-
-function Pagination({
-  page, totalPages, onChange
-}: {
-  page: number
-  totalPages: number
-  onChange: (p: number) => void
-}) {
-  const pages = Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1)
-  return (
-    <div className="flex items-center gap-1">
-      <button
-        type="button"
-        disabled={page <= 1}
-        onClick={() => onChange(page - 1)}
-        className="px-2 py-1 rounded-lg border border-suzuki-line disabled:opacity-40"
-      >
-        <ChevronLeft size={14} />
-      </button>
-      {pages.map((p) => (
-        <button
-          key={p}
-          type="button"
-          onClick={() => onChange(p)}
-          className={clsx(
-            'h-7 min-w-7 px-2 rounded-lg text-xs font-bold',
-            p === page ? 'bg-suzuki-navy text-white' : 'border border-suzuki-line hover:bg-suzuki-mist'
-          )}
-        >
-          {p}
-        </button>
-      ))}
-      <button
-        type="button"
-        disabled={page >= totalPages}
-        onClick={() => onChange(page + 1)}
-        className="px-2 py-1 rounded-lg border border-suzuki-line disabled:opacity-40"
-      >
-        <ChevronRight size={14} />
-      </button>
-    </div>
   )
 }

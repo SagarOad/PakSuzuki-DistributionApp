@@ -6,7 +6,7 @@ import {
   Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft, ImageIcon
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
-import { CompactStatCard } from '@/components/ui/CompactStatCards'
+import { StatCard } from '@/components/ui/StatCard'
 import { ProfileChart, useChartPeriod } from '@/components/ui/ProfileChart'
 import clsx from 'clsx'
 
@@ -210,26 +210,26 @@ export default function DistributorProfilePage() {
           <div>
             <h2 className="text-lg font-bold text-suzuki-navy mb-3">Distributor Order Record</h2>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <CompactStatCard
+              <StatCard
                 tone="order-blue"
                 icon={<ShoppingBasket size={20} />}
                 value={stats?.totalOrders ?? '—'}
                 label="Total Orders"
                 onClick={() => navigate(`/orders?distributorId=${id}`)}
               />
-              <CompactStatCard
+              <StatCard
                 tone="order-red"
                 icon={<Clock size={20} />}
                 value={stats?.inProcessOrders ?? '—'}
                 label="In Process"
               />
-              <CompactStatCard
+              <StatCard
                 tone="order-green"
                 icon={<CheckCircle2 size={20} />}
                 value={stats?.completedOrders ?? '—'}
                 label="Completed"
               />
-              <CompactStatCard
+              <StatCard
                 tone="order-gray"
                 icon={<XCircle size={20} />}
                 value={stats?.canceledOrders ?? '—'}
