@@ -10,6 +10,7 @@ namespace PakSuzuki.Application.Features.Retailers.Queries;
 public record RetailerListDto(
     Guid Id, string RetailerCode, string Name, string BusinessName,
     string MobileNumber, string Email, string BusinessAddress, string DistributorName,
+    string RegionName,
     string DistributorApprovalStatus, string SuperAdminApprovalStatus,
     bool IsActive, bool IsBlocked, DateTime CreatedAtUtc);
 
@@ -36,6 +37,7 @@ public class GetRetailersQueryHandler : IRequestHandler<GetRetailersQuery, Pagin
             .Select(r => new RetailerListDto(
                 r.Id, r.RetailerCode, r.Name, r.BusinessName,
                 r.MobileNumber, r.Email, r.BusinessAddress, r.Distributor.Name,
+                r.Distributor.Region.Name,
                 r.DistributorApprovalStatus.ToString(), r.SuperAdminApprovalStatus.ToString(),
                 r.IsActive, r.IsBlocked, r.CreatedAtUtc));
 

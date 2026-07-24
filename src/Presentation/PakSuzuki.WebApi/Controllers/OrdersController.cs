@@ -113,7 +113,7 @@ public class OrdersController : BaseApiController
         Ok(await Mediator.Send(new RefreshSapStatusCommand(orderId)));
 
     [HttpPatch("status/{orderId:guid}")]
-    [Authorize(Policy = "SuperAdminOnly")]
+    [Authorize(Policy = "AdminOrAbove")]
     public async Task<IActionResult> UpdateStatus(Guid orderId, UpdateOrderStatusBody body)
     {
         await Mediator.Send(new UpdateOrderStatusCommand(orderId, body.Status, body.Remarks));

@@ -10,13 +10,18 @@ import DistributorProfilePage from './pages/Distributors/DistributorProfilePage'
 import RetailersPage from './pages/Retailers/RetailersPage'
 import RetailerDetailPage from './pages/Retailers/RetailerDetailPage'
 import OrdersPage from './pages/Orders/OrdersPage'
+import OrderDetailsPage from './pages/Orders/OrderDetailsPage'
 import ProductList from './pages/Products/ProductList'
 import PlaceholderPage from './pages/PlaceholderPage'
+import MorePage from './pages/MorePage'
 import MapViewPage from './pages/Map/MapViewPage'
 import MyShopPage from './pages/Shop/MyShopPage'
 import BannerFormPage from './pages/Shop/BannerFormPage'
 import ProductDetailsPage from './pages/Shop/ProductDetailsPage'
 import DistributorRegisterPage from './pages/Distributors/DistributorRegisterPage'
+import IncentivesPage from './pages/Incentives/IncentivesPage'
+import IncentiveFormPage from './pages/Incentives/IncentiveFormPage'
+import IncentiveDetailPage from './pages/Incentives/IncentiveDetailPage'
 
 export default function App() {
   return (
@@ -35,8 +40,9 @@ export default function App() {
           <Route path="/shop/category-banners/:id" element={<BannerFormPage mode="category" />} />
           <Route path="/shop/products/:id" element={<ProductDetailsPage />} />
           <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/orders/:id" element={<OrderDetailsPage />} />
           <Route path="/claims" element={<PlaceholderPage title="Claims" />} />
-          <Route path="/more" element={<PlaceholderPage title="More" note="Promotions, incentives, reports, and settings." />} />
+          <Route path="/more" element={<MorePage />} />
           <Route path="/products" element={<ProductList />} />
 
           <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin', 'Distributor']} />}>
@@ -47,6 +53,10 @@ export default function App() {
 
           <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin']} />}>
             <Route path="/distributors" element={<DistributorsPage />} />
+            <Route path="/incentives" element={<IncentivesPage />} />
+            <Route path="/incentives/new" element={<IncentiveFormPage />} />
+            <Route path="/incentives/:id" element={<IncentiveDetailPage />} />
+            <Route path="/incentives/:id/edit" element={<IncentiveFormPage />} />
           </Route>
         </Route>
       </Route>

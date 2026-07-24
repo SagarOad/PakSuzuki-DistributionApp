@@ -323,7 +323,12 @@ export default function RetailerDetailPage() {
                     <td className="px-4 py-3.5 text-suzuki-mute">{o.distributorName}</td>
                     <td className="px-4 py-3.5"><OrderStatusPill status={o.status} /></td>
                     <td className="px-5 py-3.5 text-right">
-                      <button type="button" className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice" title="View">
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/orders/${o.id}`)}
+                        className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
+                        title="View"
+                      >
                         <Eye size={16} />
                       </button>
                     </td>

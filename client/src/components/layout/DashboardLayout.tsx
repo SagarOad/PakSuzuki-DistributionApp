@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Truck, Package, Store, ShoppingBasket,
   UsersRound, MoreHorizontal, Bell, LogOut
@@ -21,6 +21,7 @@ const allNavItems = [
 export default function DashboardLayout() {
   const { userName, role, logout } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const navItems = allNavItems.filter((item) => !role || item.roles.includes(role))
 
   return (
@@ -37,9 +38,10 @@ export default function DashboardLayout() {
                 key={item.to}
                 to={item.to}
                 end={item.end}
-                className={({ isActive }) =>
-                  clsx('nav-item min-w-[72px]', isActive && 'nav-item-active')
-                }
+                className={({ isActive }) => {
+                  const moreActive = item.to === '/more' && location.pathname.startsWith('/incentives')
+                  return clsx('nav-item min-w-[72px]', (isActive || moreActive) && 'nav-item-active')
+                }}
               >
                 {({ isActive }) => (
                   <>

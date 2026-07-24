@@ -22,6 +22,7 @@ public interface IApplicationDbContext
     DbSet<Promotion> Promotions { get; }
     DbSet<Incentive> Incentives { get; }
     DbSet<IncentiveParticipant> IncentiveParticipants { get; }
+    DbSet<IncentiveAchievementSlab> IncentiveAchievementSlabs { get; }
     DbSet<Target> Targets { get; }
     DbSet<RegionalHeadAssignment> RegionalHeadAssignments { get; }
 

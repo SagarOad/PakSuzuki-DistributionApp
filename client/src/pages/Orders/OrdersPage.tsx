@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ShoppingBasket, CheckCircle2, XCircle, AlertTriangle, Clock,
@@ -7,6 +8,7 @@ import {
 import { api } from '@/api/axiosClient'
 import { CompactStatCard, CompactStatRow } from '@/components/ui/CompactStatCards'
 import clsx from 'clsx'
+import { COMPLETED_STATUSES, CANCELED_STATUSES, toUiStatus } from './orderTypes'
 
 interface OrderRow {
   id: string
@@ -17,18 +19,6 @@ interface OrderRow {
   status: string
   grandTotal: number
   createdAtUtc: string
-}
-
-interface OrderDetail {
-  id: string
-  orderNumber: string
-  status: string
-  items: {
-    productName: string
-    productSku: string
-    requestedQuantity: number
-    requestedUnit: string
-  }[]
 }
 
 interface Paged<T> {
@@ -53,17 +43,17 @@ function countStatuses(rows: { status: string; count: number }[] | undefined, na
 const PROCESS = [
   'PendingDistributorApproval', 'PendingPakSuzukiApproval', 'SubmittedToSap',
   'ApprovedByDistributor', 'PartiallyApprovedByDistributor', 'ForwardedToPakSuzuki',
-  'ApprovedByPakSuzuki', 'PartiallyDelivered'
+  'ApprovedByPakSuzuki', 'PartiallyDelivered', 'SentBackForModification'
 ]
-const COMPLETED = ['Delivered', 'InvoiceConfirmed']
-const CANCELED = ['Cancelled', 'RejectedByDistributor']
+const COMPLETED = COMPLETED_STATUSES
+const CANCELED = CANCELED_STATUSES
 
 export default function OrdersPage() {
+  const navigate = useNavigate()
   const [period, setPeriod] = useState<'Month' | 'Week' | 'Year'>('Month')
   const [tab, setTab] = useState<StatusTab>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const dashQuery = useQuery({
     queryKey: ['dashboard-superadmin'],
@@ -87,12 +77,6 @@ export default function OrdersPage() {
           statusFilter: tab === 'all' || tab === 'threshold' || tab === 'process' ? undefined : statusFilter
         }
       })).data
-  })
-
-  const detailQuery = useQuery({
-    queryKey: ['order-detail', selectedId],
-    enabled: !!selectedId,
-    queryFn: async () => (await api.get<OrderDetail>(`/orders/${selectedId}`)).data
   })
 
   const inProcess = countStatuses(dashQuery.data?.ordersByStatus, PROCESS)
@@ -245,7 +229,7 @@ export default function OrdersPage() {
                   <td className="px-5 py-3.5 text-right">
                     <button
                       type="button"
-                      onClick={() => setSelectedId(o.id)}
+                      onClick={() => navigate(`/orders/${o.id}`)}
                       className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
                       title="View"
                     >
@@ -280,49 +264,24 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {selectedId && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setSelectedId(null)}>
-          <div className="bg-white rounded-2xl shadow-card max-w-lg w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-suzuki-navy mb-4">Order Detail</h3>
-            {detailQuery.isLoading && <p className="text-sm text-suzuki-mute">Loading…</p>}
-            {detailQuery.data && (
-              <div className="space-y-3 text-sm">
-                <div><span className="text-suzuki-mute">Number:</span> <span className="font-semibold">{detailQuery.data.orderNumber}</span></div>
-                <div><span className="text-suzuki-mute">Status:</span> <OrderStatusPill status={detailQuery.data.status} /></div>
-                <div className="border-t border-suzuki-line pt-3">
-                  <div className="font-semibold text-suzuki-navy mb-2">Products</div>
-                  <ul className="space-y-1">
-                    {detailQuery.data.items.map((i) => (
-                      <li key={i.productSku} className="flex justify-between gap-2">
-                        <span>{i.productName}</span>
-                        <span className="text-suzuki-mute">{i.requestedQuantity} {i.requestedUnit}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            )}
-            <button type="button" onClick={() => setSelectedId(null)} className="mt-6 w-full rounded-xl bg-suzuki-navy text-white font-semibold py-2.5">
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
 function OrderStatusPill({ status }: { status: string }) {
-  let cls = 'bg-suzuki-mist text-suzuki-mute'
-  let label = status
-  if (COMPLETED.includes(status)) { cls = 'bg-emerald-100 text-suzuki-ok'; label = 'Completed' }
-  else if (CANCELED.includes(status)) { cls = 'bg-slate-200 text-suzuki-mute'; label = 'Canceled' }
-  else if (status === 'PendingDistributorApproval' || status === 'PendingPakSuzukiApproval') {
-    cls = 'bg-amber-100 text-amber-800'; label = 'Pending'
-  }
-  else if (PROCESS.includes(status)) { cls = 'bg-rose-100 text-suzuki-red'; label = 'In Process' }
+  const ui = toUiStatus(status)
+  const cls =
+    ui === 'Completed'
+      ? 'bg-emerald-100 text-suzuki-ok'
+      : ui === 'Cancelled'
+        ? 'bg-slate-200 text-suzuki-mute'
+        : ui === 'Delivery In Process'
+          ? 'bg-orange-100 text-orange-800'
+          : ui === 'Pending'
+            ? 'bg-amber-100 text-amber-800'
+            : 'bg-rose-100 text-suzuki-red'
 
-  return <span className={clsx('inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-bold', cls)}>{label}</span>
+  return <span className={clsx('inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-bold', cls)}>{ui}</span>
 }
 
 function OrdersChart({ points }: { points: number[] }) {
