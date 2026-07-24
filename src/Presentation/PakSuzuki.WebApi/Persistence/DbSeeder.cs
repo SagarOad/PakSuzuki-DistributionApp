@@ -33,6 +33,7 @@ public static class DbSeeder
         }
 
         await SeedRegionsAsync(context);
+        await SeedDefaultSettingsAsync(context);
 
         const string superAdminEmail = "superadmin@paksuzuki.local";
         if (await userManager.FindByNameAsync(superAdminEmail) is null)
@@ -41,6 +42,21 @@ public static class DbSeeder
             var result = await userManager.CreateAsync(user, "ChangeMe!2026");
             if (result.Succeeded)
                 await userManager.AddToRoleAsync(user, Roles.SuperAdmin);
+        }
+    }
+
+    private static async Task SeedDefaultSettingsAsync(ApplicationDbContext context)
+    {
+        const string key = "ShipToParty:AmountThreshold";
+        if (!await context.SystemSettings.AnyAsync(s => s.Key == key))
+        {
+            context.SystemSettings.Add(new SystemSetting
+            {
+                Id = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeee0001"),
+                Key = key,
+                Value = "10000000"
+            });
+            await context.SaveChangesAsync();
         }
     }
 

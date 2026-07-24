@@ -1,31 +1,37 @@
 import { Link } from 'react-router-dom'
-import { Gift, Megaphone, Settings2 } from 'lucide-react'
+import { FileBarChart2, Gift, Image, Settings } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 
 export default function MorePage() {
   const { role } = useAuth()
-  const isStaff = role === 'SuperAdmin' || role === 'Admin'
 
   const items = [
     {
-      to: '/incentives',
-      title: 'Incentive Management',
-      note: 'Create programs by Liters, Cartons, or Amount. Track distributors and retailers live.',
-      icon: Gift,
+      to: '/promotions',
+      title: 'Banner & Promotions',
+      note: 'Newsletter pop-ups and promotion banners for distributors and retailers.',
+      icon: Image,
       roles: ['SuperAdmin', 'Admin']
     },
     {
-      to: '/claims',
-      title: 'Claims',
-      note: 'Claims workflow (coming next).',
-      icon: Megaphone,
+      to: '/reports',
+      title: 'Reports',
+      note: 'Sales, orders, targets, and claims report exports.',
+      icon: FileBarChart2,
       roles: ['SuperAdmin', 'Admin', 'Distributor']
     },
     {
-      to: '/products',
-      title: 'Products & Pricing',
-      note: 'Catalog and price history tools.',
-      icon: Settings2,
+      to: '/settings',
+      title: 'Settings',
+      note: 'Profile information and ship-to-party order threshold.',
+      icon: Settings,
+      roles: ['SuperAdmin', 'Admin', 'Distributor']
+    },
+    {
+      to: '/incentives',
+      title: 'Incentive Management',
+      note: 'Create programs by Liters, Cartons, or Amount.',
+      icon: Gift,
       roles: ['SuperAdmin', 'Admin']
     }
   ].filter((i) => !role || i.roles.includes(role))
@@ -45,9 +51,7 @@ export default function MorePage() {
             </div>
             <div className="font-bold text-suzuki-navy">{item.title}</div>
             <p className="text-sm text-suzuki-mute mt-1">{item.note}</p>
-            {item.to === '/incentives' && isStaff && (
-              <span className="inline-block mt-3 text-xs font-bold text-suzuki-blue">Open →</span>
-            )}
+            <span className="inline-block mt-3 text-xs font-bold text-suzuki-blue">Open →</span>
           </Link>
         ))}
       </div>

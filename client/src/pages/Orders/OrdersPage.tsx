@@ -58,7 +58,6 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1)
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const dashQuery = useQuery({
     queryKey: ['dashboard-superadmin'],
@@ -207,7 +206,7 @@ export default function OrdersPage() {
             <td className="pl-3 pr-4 py-3.5 text-right">
               <button
                 type="button"
-                onClick={() => setSelectedId(o.id)}
+                onClick={() => navigate(`/orders/${o.id}`)}
                 className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
                 title="View"
               >

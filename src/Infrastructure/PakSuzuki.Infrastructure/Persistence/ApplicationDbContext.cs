@@ -42,6 +42,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
     public DbSet<Incentive> Incentives => Set<Incentive>();
     public DbSet<IncentiveParticipant> IncentiveParticipants => Set<IncentiveParticipant>();
     public DbSet<IncentiveAchievementSlab> IncentiveAchievementSlabs => Set<IncentiveAchievementSlab>();
+    public DbSet<OrderClaim> OrderClaims => Set<OrderClaim>();
+    public DbSet<ClaimImage> ClaimImages => Set<ClaimImage>();
+    public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<Target> Targets => Set<Target>();
     public DbSet<RegionalHeadAssignment> RegionalHeadAssignments => Set<RegionalHeadAssignment>();
 

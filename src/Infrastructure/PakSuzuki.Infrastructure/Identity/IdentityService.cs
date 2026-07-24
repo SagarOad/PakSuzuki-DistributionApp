@@ -152,6 +152,55 @@ public class IdentityService : IIdentityService
             throw new InvalidOperationException(string.Join("; ", result.Errors.Select(e => e.Description)));
     }
 
+    public async Task<UserProfileDto> GetProfileAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString())
+            ?? throw new NotFoundException(nameof(ApplicationUser), userId);
+        var roles = await _userManager.GetRolesAsync(user);
+        return new UserProfileDto(
+            user.Id,
+            user.UserName ?? "",
+            user.Email ?? "",
+            user.PhoneNumber,
+            roles.FirstOrDefault() ?? "");
+    }
+
+    public async Task UpdateProfileAsync(
+        Guid userId, string userName, string email, string? phoneNumber, string? newPassword, CancellationToken ct = default)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString())
+            ?? throw new NotFoundException(nameof(ApplicationUser), userId);
+
+        if (!string.IsNullOrWhiteSpace(userName) && user.UserName != userName)
+        {
+            var setName = await _userManager.SetUserNameAsync(user, userName.Trim());
+            if (!setName.Succeeded)
+                throw new InvalidOperationException(string.Join("; ", setName.Errors.Select(e => e.Description)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(email) && user.Email != email)
+        {
+            var setEmail = await _userManager.SetEmailAsync(user, email.Trim());
+            if (!setEmail.Succeeded)
+                throw new InvalidOperationException(string.Join("; ", setEmail.Errors.Select(e => e.Description)));
+        }
+
+        if (phoneNumber != null)
+        {
+            var setPhone = await _userManager.SetPhoneNumberAsync(user, phoneNumber.Trim());
+            if (!setPhone.Succeeded)
+                throw new InvalidOperationException(string.Join("; ", setPhone.Errors.Select(e => e.Description)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(newPassword))
+        {
+            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+            var reset = await _userManager.ResetPasswordAsync(user, token, newPassword);
+            if (!reset.Succeeded)
+                throw new InvalidOperationException(string.Join("; ", reset.Errors.Select(e => e.Description)));
+        }
+    }
+
     private async Task<bool> IsSentBackForCorrectionAsync(ApplicationUser user, CancellationToken ct)
     {
         var retailer = await _dbContext.Retailers.AsNoTracking()

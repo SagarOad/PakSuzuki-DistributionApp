@@ -134,7 +134,7 @@ export default function MapViewPage() {
               ))}
             </div>
 
-            {/* <div className="mt-3">
+            <div className="mt-3">
               <select
                 value={regionId}
                 onChange={(e) => setRegionId(e.target.value)}
@@ -145,7 +145,7 @@ export default function MapViewPage() {
                   <option key={r.id} value={r.id}>{r.name}</option>
                 ))}
               </select>
-            </div> */}
+            </div>
 
             <div className="mt-3 flex items-center gap-2 rounded-xl border border-suzuki-line bg-suzuki-mist px-3 py-2.5">
               <Search size={16} className="text-suzuki-mute shrink-0" />

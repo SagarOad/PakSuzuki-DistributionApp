@@ -13,4 +13,8 @@ public interface IIdentityService
     Task<string?> ForgotPasswordAndGetDevOtpAsync(string userNameOrEmail, CancellationToken ct = default);
     Task ResetPasswordAsync(string userNameOrEmail, string token, string newPassword, CancellationToken ct = default);
     Task ResetPasswordWithOtpAsync(string userNameOrEmail, string otp, string newPassword, CancellationToken ct = default);
+    Task<UserProfileDto> GetProfileAsync(Guid userId, CancellationToken ct = default);
+    Task UpdateProfileAsync(Guid userId, string userName, string email, string? phoneNumber, string? newPassword, CancellationToken ct = default);
 }
+
+public record UserProfileDto(Guid Id, string UserName, string Email, string? PhoneNumber, string Role);

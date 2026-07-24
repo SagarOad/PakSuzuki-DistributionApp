@@ -23,6 +23,9 @@ public interface IApplicationDbContext
     DbSet<Incentive> Incentives { get; }
     DbSet<IncentiveParticipant> IncentiveParticipants { get; }
     DbSet<IncentiveAchievementSlab> IncentiveAchievementSlabs { get; }
+    DbSet<OrderClaim> OrderClaims { get; }
+    DbSet<ClaimImage> ClaimImages { get; }
+    DbSet<SystemSetting> SystemSettings { get; }
     DbSet<Target> Targets { get; }
     DbSet<RegionalHeadAssignment> RegionalHeadAssignments { get; }
 
