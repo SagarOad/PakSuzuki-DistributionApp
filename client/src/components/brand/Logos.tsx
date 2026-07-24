@@ -7,7 +7,7 @@ const SUZUKI_WHITE = '/brand/suzuki-white.png'
 const ECSTAR_NAVBAR = '/brand/ecstar-navbar.png'
 
 export function SuzukiLogo({
-  className = 'h-9',
+  className = 'h-9 max-w-[140px]',
   variant = 'navbar'
 }: {
   className?: string
@@ -24,7 +24,7 @@ export function SuzukiLogo({
 }
 
 export function EcstarLogo({
-  className = 'h-10'
+  className = 'h-10 max-w-[140px]'
 }: {
   className?: string
 }) {

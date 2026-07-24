@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  ShoppingBasket, CheckCircle2, XCircle, AlertTriangle, Clock,
-  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight
+  ShoppingBasket, CheckCircle2, XCircle, AlertTriangle, Clock, Eye
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
-import { CompactStatCard, CompactStatRow } from '@/components/ui/CompactStatCards'
+import { StatCard, StatCardRow } from '@/components/ui/StatCard'
+import { StatsGraph } from '@/components/ui/StatsGraph'
+import { OrderTable, ExportExcelButton, DateFilterField } from '@/components/ui/DataTable'
 import clsx from 'clsx'
 import { COMPLETED_STATUSES, CANCELED_STATUSES, toUiStatus } from './orderTypes'
 
@@ -19,6 +20,7 @@ interface OrderRow {
   status: string
   grandTotal: number
   createdAtUtc: string
+  
 }
 
 interface Paged<T> {
@@ -54,6 +56,9 @@ export default function OrdersPage() {
   const [tab, setTab] = useState<StatusTab>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const dashQuery = useQuery({
     queryKey: ['dashboard-superadmin'],
@@ -111,35 +116,22 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-5">
-      <CompactStatRow>
-        <CompactStatCard tone="order-blue" icon={<ShoppingBasket size={20} />} value={total} label="Total Orders" onClick={() => setTab('all')} />
-        <CompactStatCard tone="order-red" icon={<Clock size={20} />} value={inProcess} label="In Process" onClick={() => setTab('process')} />
-        <CompactStatCard tone="order-green" icon={<CheckCircle2 size={20} />} value={completed} label="Completed" onClick={() => setTab('completed')} />
-        <CompactStatCard tone="order-gray" icon={<XCircle size={20} />} value={canceled} label="Canceled" onClick={() => setTab('canceled')} />
-        <CompactStatCard tone="order-orange" icon={<AlertTriangle size={20} />} value={0} label="Threshold Reached" onClick={() => setTab('threshold')} />
-      </CompactStatRow>
+      <StatCardRow>
+        <StatCard tone="order-blue" icon={<ShoppingBasket size={20} />} value={total} label="Total Orders" onClick={() => setTab('all')} />
+        <StatCard tone="order-red" icon={<Clock size={20} />} value={inProcess} label="In Process" onClick={() => setTab('process')} />
+        <StatCard tone="order-green" icon={<CheckCircle2 size={20} />} value={completed} label="Completed" onClick={() => setTab('completed')} />
+        <StatCard tone="order-gray" icon={<XCircle size={20} />} value={canceled} label="Canceled" onClick={() => setTab('canceled')} />
+        <StatCard tone="order-orange" icon={<AlertTriangle size={20} />} value={0} label="Threshold Reached" onClick={() => setTab('threshold')} />
+      </StatCardRow>
 
-      <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-bold text-suzuki-navy">Orders Stats</h2>
-          <div className="flex rounded-full bg-suzuki-mist p-0.5 text-xs font-semibold">
-            {(['Month', 'Week', 'Year'] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPeriod(p)}
-                className={clsx(
-                  'px-3 py-1 rounded-full transition-colors',
-                  period === p ? 'bg-suzuki-navy text-white' : 'text-suzuki-mute hover:text-suzuki-ink'
-                )}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
-        <OrdersChart points={chartPoints} />
-      </div>
+      <StatsGraph
+        title="Orders Stats"
+        points={chartPoints}
+        period={period}
+        onPeriodChange={setPeriod}
+        ariaLabel="Orders stats chart"
+        size="large"
+      />
 
       <div className="flex flex-wrap gap-2">
         {(
@@ -165,104 +157,66 @@ export default function OrdersPage() {
         ))}
       </div>
 
-      <div className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden">
-        <div className="px-5 pt-5 pb-3 flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
-          <h3 className="font-bold text-suzuki-navy">Orders List</h3>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 bg-suzuki-mist rounded-lg px-3 py-2 border border-suzuki-line">
-              <Search size={14} className="text-suzuki-mute" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search"
-                className="bg-transparent text-sm outline-none w-36"
-              />
-            </div>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-blue/40 text-suzuki-blue px-3 py-2 text-xs font-semibold hover:bg-suzuki-ice"
-            >
-              <FileSpreadsheet size={14} /> Export Excel
-            </button>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-suzuki-mist/80 text-left text-xs font-bold uppercase tracking-wide text-suzuki-mute">
-                <th className="px-5 py-3">Order Date</th>
-                <th className="px-4 py-3">Order Number</th>
-                <th className="px-4 py-3">Retailer / Distributor</th>
-                <th className="px-4 py-3">Source</th>
-                <th className="px-4 py-3">Total</th>
-                <th className="px-4 py-3">Order Status</th>
-                <th className="px-5 py-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ordersQuery.isLoading && (
-                <tr><td colSpan={7} className="px-5 py-10 text-center text-suzuki-mute">Loading…</td></tr>
-              )}
-              {!ordersQuery.isLoading && filteredItems.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-suzuki-mute">
-                    {tab === 'threshold' ? 'No threshold-reached orders yet.' : 'No orders found.'}
-                  </td>
-                </tr>
-              )}
-              {filteredItems.map((o) => (
-                <tr key={o.id} className="border-t border-suzuki-line/80 hover:bg-suzuki-mist/40">
-                  <td className="px-5 py-3.5 text-suzuki-mute">
-                    {new Date(o.createdAtUtc).toLocaleDateString()}
-                  </td>
-                  <td className="px-4 py-3.5 font-mono text-xs font-semibold text-suzuki-ink">{o.orderNumber}</td>
-                  <td className="px-4 py-3.5 text-suzuki-mute">
-                    <div className="font-medium text-suzuki-ink">{o.retailerName ?? '—'}</div>
-                    <div className="text-xs">{o.distributorName}</div>
-                  </td>
-                  <td className="px-4 py-3.5 text-suzuki-mute">{o.source}</td>
-                  <td className="px-4 py-3.5 font-semibold text-suzuki-ink">
-                    Rs {o.grandTotal.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3.5"><OrderStatusPill status={o.status} /></td>
-                  <td className="px-5 py-3.5 text-right">
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/orders/${o.id}`)}
-                      className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
-                      title="View"
-                    >
-                      <Eye size={16} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="px-5 py-4 border-t border-suzuki-line flex flex-col sm:flex-row gap-3 items-center justify-between text-xs text-suzuki-mute">
-          <span>
-            Showing {filteredItems.length === 0 ? '00' : '01'} to{' '}
-            {String(filteredItems.length).padStart(2, '0')} of {ordersQuery.data?.totalCount ?? 0} entries
-          </span>
-          <div className="flex items-center gap-1">
-            <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)} className="px-2 py-1 rounded-lg border border-suzuki-line disabled:opacity-40">
-              <ChevronLeft size={14} />
-            </button>
-            <button type="button" className="h-7 min-w-7 px-2 rounded-lg text-xs font-bold bg-suzuki-navy text-white">{page}</button>
-            <button
-              type="button"
-              disabled={page >= (ordersQuery.data?.totalPages ?? 1)}
-              onClick={() => setPage(page + 1)}
-              className="px-2 py-1 rounded-lg border border-suzuki-line disabled:opacity-40"
-            >
-              <ChevronRight size={14} />
-            </button>
-          </div>
-        </div>
-      </div>
+      <OrderTable
+        title="Orders List"
+        search={search}
+        onSearchChange={setSearch}
+        filterBar={
+          <>
+            <span className="text-sm font-semibold text-[#0B2E59]">From</span>
+            <DateFilterField value={fromDate} onChange={setFromDate} />
+            <span className="text-sm font-semibold text-[#0B2E59]">To</span>
+            <DateFilterField value={toDate} onChange={setToDate} />
+          </>
+        }
+        toolbarActions={<ExportExcelButton />}
+        columns={[
+          { key: 'date', header: 'Order Date' },
+          { key: 'number', header: 'Order Number' },
+          { key: 'party', header: 'Retailer / Distributor', wide: true },
+          { key: 'source', header: 'Source' },
+          { key: 'total', header: 'Total' },
+          { key: 'status', header: 'Order Status' },
+          { key: 'action', header: 'Action', align: 'right' }
+        ]}
+        loading={ordersQuery.isLoading}
+        empty={tab === 'threshold' ? 'No threshold-reached orders yet.' : 'No orders found.'}
+        pagination={{
+          page,
+          totalPages: ordersQuery.data?.totalPages ?? 1,
+          onChange: setPage,
+          variant: 'simple',
+          showingText: `Showing ${filteredItems.length === 0 ? '00' : '01'} to ${String(filteredItems.length).padStart(2, '0')} of ${ordersQuery.data?.totalCount ?? 0} entries`
+        }}
+      >
+        {filteredItems.map((o) => (
+          <tr key={o.id} className="border-b border-[#E2E4EA]/80 hover:bg-[#F5F7FB]/60">
+            <td className="pl-4 pr-3 py-3.5 text-[#64748B]">
+              {new Date(o.createdAtUtc).toLocaleDateString()}
+            </td>
+            <td className="px-3 py-3.5 font-mono text-xs font-semibold text-[#0B2E59]">{o.orderNumber}</td>
+            <td className="px-3 py-3.5 text-[#64748B]">
+              <div className="font-medium text-[#0B2E59]">{o.retailerName ?? '—'}</div>
+              <div className="text-xs">{o.distributorName}</div>
+            </td>
+            <td className="px-3 py-3.5 text-[#64748B]">{o.source}</td>
+            <td className="px-3 py-3.5 font-semibold text-[#0B2E59]">
+              Rs {o.grandTotal.toLocaleString()}
+            </td>
+            <td className="px-3 py-3.5"><OrderStatusPill status={o.status} /></td>
+            <td className="pl-3 pr-4 py-3.5 text-right">
+              <button
+                type="button"
+                onClick={() => setSelectedId(o.id)}
+                className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
+                title="View"
+              >
+                <Eye size={16} />
+              </button>
+            </td>
+          </tr>
+        ))}
+      </OrderTable>
 
     </div>
   )
@@ -282,45 +236,4 @@ function OrderStatusPill({ status }: { status: string }) {
             : 'bg-rose-100 text-suzuki-red'
 
   return <span className={clsx('inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-bold', cls)}>{ui}</span>
-}
-
-function OrdersChart({ points }: { points: number[] }) {
-  const w = 720
-  const h = 180
-  const pad = 24
-  const max = Math.max(...points, 1)
-  const coords = points.map((v, i) => {
-    const x = pad + (i * (w - pad * 2)) / Math.max(points.length - 1, 1)
-    const y = h - pad - (v / max) * (h - pad * 1.6)
-    return [x, y] as const
-  })
-  const line = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x},${y}`).join(' ')
-  const area = `${line} L${coords[coords.length - 1][0]},${h - pad} L${coords[0][0]},${h - pad} Z`
-
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-44" role="img" aria-label="Orders stats chart">
-      {[0.25, 0.5, 0.75, 1].map((t) => (
-        <line
-          key={t}
-          x1={pad}
-          x2={w - 8}
-          y1={h - pad - t * (h - pad * 1.6)}
-          y2={h - pad - t * (h - pad * 1.6)}
-          stroke="#E2E8F0"
-          strokeDasharray="4 4"
-        />
-      ))}
-      <path d={area} fill="url(#ordersFill)" />
-      <path d={line} fill="none" stroke="#005BAC" strokeWidth="2.5" strokeLinecap="round" />
-      {coords.map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r="3" fill="#005BAC" />
-      ))}
-      <defs>
-        <linearGradient id="ordersFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#7EB6E8" stopOpacity="0.4" />
-          <stop offset="100%" stopColor="#7EB6E8" stopOpacity="0.02" />
-        </linearGradient>
-      </defs>
-    </svg>
-  )
 }

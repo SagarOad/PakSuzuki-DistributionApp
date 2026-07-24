@@ -82,7 +82,7 @@ export function SendForCorrectionModal({
               />
             </div>
 
-            <div className="mt-6 grid grid-cols-2 gap-3">
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={onBack}
@@ -94,7 +94,7 @@ export function SendForCorrectionModal({
                 type="button"
                 disabled={submitting || !remarks.trim()}
                 onClick={onSend}
-                className="rounded-xl bg-suzuki-red text-white font-bold py-3 hover:opacity-90 disabled:opacity-50 transition-opacity"
+                className="rounded-xl bg-suzuki-red text-white font-bold py-3 text-sm sm:text-base hover:opacity-90 disabled:opacity-50 transition-opacity"
               >
                 {submitting ? 'SENDING…' : 'SEND CORRECTION'}
               </button>

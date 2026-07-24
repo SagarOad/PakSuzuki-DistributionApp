@@ -4,7 +4,7 @@ import {
   Package, UserPlus, ShoppingBasket, Clock, Target, ChevronRight
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
-import { CompactStatCard, CompactStatRow } from '@/components/ui/CompactStatCards'
+import { StatCard, StatCardRow } from '@/components/ui/StatCard'
 import { useAuth } from '@/context/AuthContext'
 import clsx from 'clsx'
 
@@ -58,36 +58,36 @@ export default function DistributorDashboard() {
         <p className="text-sm text-suzuki-mute mt-1">Welcome back, {userName}</p>
       </div>
 
-      <CompactStatRow>
-        <CompactStatCard
+      <StatCardRow>
+        <StatCard
           tone="sky"
           icon={<Package size={22} />}
           value={data?.totalRetailers ?? '—'}
           label="My Retailers"
           onClick={() => navigate('/retailers')}
         />
-        <CompactStatCard
+        <StatCard
           tone="request-red"
           icon={<UserPlus size={22} />}
           value={pending?.totalCount ?? 0}
           label="Retailer Requests"
           onClick={() => navigate('/retailers?tab=requests')}
         />
-        <CompactStatCard
+        <StatCard
           tone="order-blue"
           icon={<ShoppingBasket size={22} />}
           value={data?.totalOrders ?? '—'}
           label="Total Orders"
           onClick={() => navigate('/orders')}
         />
-        <CompactStatCard
+        <StatCard
           tone="order-red"
           icon={<Clock size={22} />}
           value={data?.openOrders ?? '—'}
           label="Open Orders"
           onClick={() => navigate('/orders')}
         />
-      </CompactStatRow>
+      </StatCardRow>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5">
