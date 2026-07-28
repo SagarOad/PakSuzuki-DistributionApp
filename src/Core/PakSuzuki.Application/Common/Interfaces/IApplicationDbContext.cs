@@ -26,6 +26,7 @@ public interface IApplicationDbContext
     DbSet<OrderClaim> OrderClaims { get; }
     DbSet<ClaimImage> ClaimImages { get; }
     DbSet<SystemSetting> SystemSettings { get; }
+    DbSet<SapOutboundQueue> SapOutboundQueues { get; }
     DbSet<Target> Targets { get; }
     DbSet<RegionalHeadAssignment> RegionalHeadAssignments { get; }
 

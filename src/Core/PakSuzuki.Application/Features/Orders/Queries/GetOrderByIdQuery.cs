@@ -8,6 +8,7 @@ namespace PakSuzuki.Application.Features.Orders.Queries;
 public record OrderLineItemDto(
     Guid Id, Guid ProductId, string ProductName, string ProductSku, string? ProductBio,
     string? PrimaryImageUrl, string? CategoryName,
+    Guid? ProductVariantId, string? VariantTypeName,
     decimal RequestedQuantity, string RequestedUnit, decimal? ApprovedQuantity,
     decimal UnitPrice, decimal LineSubTotal, decimal LineGst, decimal LineFed);
 
@@ -23,6 +24,7 @@ public record OrderDetailDto(
     decimal GstPercent,
     string? SapDocumentNumber, string? SapDeliveryNumber, string? SapGrnNumber, string? SapInvoiceNumber,
     bool IsPartialDelivery, bool ThresholdReached,
+    Guid? OriginatingRetailerOrderId,
     DateTime? DistributorActionedAtUtc, DateTime? PakSuzukiActionedAtUtc,
     DateTime? InvoiceConfirmedAtUtc, DateTime CreatedAtUtc,
     List<OrderLineItemDto> Items, List<OrderProofOfDeliveryDto> ProofsOfDelivery);
@@ -55,6 +57,7 @@ public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, Order
         var items = order.Items.Select(i => new OrderLineItemDto(
             i.Id, i.ProductId, i.Product.Name, i.Product.Sku, i.Product.Bio,
             i.Product.PrimaryImageUrl, i.Product.CategoryName,
+            i.ProductVariantId, i.VariantTypeName,
             i.RequestedQuantity, i.RequestedUnit.ToString(), i.ApprovedQuantity,
             i.UnitPrice, i.LineSubTotal, i.LineGst, i.LineFed)).ToList();
 
@@ -77,6 +80,7 @@ public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, Order
             gstPercent,
             order.SapDocumentNumber, order.SapDeliveryNumber, order.SapGrnNumber, order.SapInvoiceNumber,
             order.IsPartialDelivery, order.Retailer?.IsEligibleForDirectShipToParty ?? false,
+            order.OriginatingRetailerOrderId,
             order.DistributorActionedAtUtc, order.PakSuzukiActionedAtUtc,
             order.InvoiceConfirmedAtUtc, order.CreatedAtUtc, items, proofs);
     }

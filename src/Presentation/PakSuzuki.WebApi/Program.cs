@@ -31,33 +31,54 @@ builder.Services.Configure<Microsoft.AspNetCore.Mvc.ApiBehaviorOptions>(options 
 {
     options.InvalidModelStateResponseFactory = context =>
     {
-        var errors = context.ModelState
-            .Where(e => e.Value is { Errors.Count: > 0 })
-            .ToDictionary(
-                e => string.IsNullOrEmpty(e.Key) ? "body" : e.Key,
-                e => e.Value!.Errors
-                    .Select(err =>
-                    {
-                        var msg = err.ErrorMessage;
-                        if (string.IsNullOrWhiteSpace(msg) ||
-                            msg.Contains("invalid after a value", StringComparison.OrdinalIgnoreCase) ||
-                            msg.Contains("JSON", StringComparison.OrdinalIgnoreCase))
-                        {
-                            return "Request body is not valid JSON. Check for missing commas, extra quotes, "
-                                 + "or trailing characters, and ensure Content-Type is application/json.";
-                        }
-                        return msg;
-                    })
-                    .Distinct()
-                    .ToArray());
+        var errors = new Dictionary<string, string[]>();
+        foreach (var entry in context.ModelState.Where(e => e.Value is { Errors.Count: > 0 }))
+        {
+            var key = string.IsNullOrEmpty(entry.Key) ? "body" : entry.Key;
+            // ASP.NET names the complex body parameter (e.g. "command") when JSON fails to bind.
+            if (key is "command" or "request" or "body")
+                key = "body";
+            if (key.StartsWith("$.", StringComparison.Ordinal))
+                key = key[2..]; // $.mobileNumber → mobileNumber
 
-        var payload = new
+            var messages = entry.Value!.Errors.Select(err =>
+            {
+                var msg = err.ErrorMessage;
+                var looksLikeJsonProblem =
+                    string.IsNullOrWhiteSpace(msg) ||
+                    msg.Contains("invalid after a value", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("JSON", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("could not be converted", StringComparison.OrdinalIgnoreCase) ||
+                    (msg.Contains("is required", StringComparison.OrdinalIgnoreCase) && key == "body");
+
+                if (looksLikeJsonProblem)
+                {
+                    if (key != "body")
+                    {
+                        return $"Invalid or malformed value for '{key}'. "
+                             + "Ensure the field has a proper JSON string (quotes closed), e.g. "
+                             + $"\"{key}\": \"value\", and Content-Type is application/json.";
+                    }
+
+                    return "Request body is not valid JSON or is missing. "
+                         + "Check for missing commas/quotes (e.g. \"mobileNumber\": \"03331234567\"), "
+                         + "no trailing commas, and set Content-Type: application/json.";
+                }
+                return msg;
+            }).Distinct().ToArray();
+
+            if (errors.ContainsKey(key))
+                errors[key] = errors[key].Concat(messages).Distinct().ToArray();
+            else
+                errors[key] = messages;
+        }
+
+        return new Microsoft.AspNetCore.Mvc.BadRequestObjectResult(new
         {
             title = "Validation failed",
             status = 400,
             errors
-        };
-        return new Microsoft.AspNetCore.Mvc.BadRequestObjectResult(payload)
+        })
         {
             ContentTypes = { "application/json" }
         };

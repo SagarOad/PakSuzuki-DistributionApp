@@ -20,7 +20,11 @@ public class UploadProofOfDeliveryCommandValidator : AbstractValidator<UploadPro
     {
         RuleFor(x => x.OrderId).NotEmpty();
         RuleFor(x => x.UploadedByUserId).NotEmpty();
-        RuleFor(x => x.UploadedByRole).NotEmpty().Must(x => x is Domain.Enums.Roles.Distributor or Domain.Enums.Roles.Retailer);
+        RuleFor(x => x.UploadedByRole).NotEmpty().Must(x =>
+            x is Domain.Enums.Roles.Distributor
+                or Domain.Enums.Roles.Retailer
+                or Domain.Enums.Roles.SuperAdmin
+                or Domain.Enums.Roles.Admin);
         RuleFor(x => x.FileName).NotEmpty();
     }
 }
@@ -40,8 +44,20 @@ public class UploadProofOfDeliveryCommandHandler : IRequestHandler<UploadProofOf
 
     public async Task<Guid> Handle(UploadProofOfDeliveryCommand request, CancellationToken ct)
     {
-        var orderExists = await _context.Orders.AnyAsync(o => o.Id == request.OrderId, ct);
-        if (!orderExists) throw new NotFoundException(nameof(Domain.Entities.Order), request.OrderId);
+        var order = await _context.Orders.Include(o => o.Retailer)
+            .FirstOrDefaultAsync(o => o.Id == request.OrderId, ct)
+            ?? throw new NotFoundException(nameof(Domain.Entities.Order), request.OrderId);
+
+        var shipToParty = order.Source == Domain.Enums.OrderSourceType.RetailerOrder
+            && order.Retailer?.IsEligibleForDirectShipToParty == true;
+        var pakSuzukiDelivers = order.Source == Domain.Enums.OrderSourceType.DistributorDirectOrder || shipToParty;
+        var isStaff = request.UploadedByRole is Domain.Enums.Roles.SuperAdmin or Domain.Enums.Roles.Admin;
+        var isDistributor = request.UploadedByRole == Domain.Enums.Roles.Distributor;
+
+        if (pakSuzukiDelivers && !isStaff)
+            throw new ForbiddenAccessException("Only Pak Suzuki can upload proof for manufacturer / Ship-to-Party orders.");
+        if (!pakSuzukiDelivers && !isDistributor && request.UploadedByRole != Domain.Enums.Roles.Retailer)
+            throw new ForbiddenAccessException("Only the fulfilling distributor can upload proof for this order.");
 
         var url = await _fileStorage.UploadAsync(request.Content, request.FileName, ContainerName, ct);
 

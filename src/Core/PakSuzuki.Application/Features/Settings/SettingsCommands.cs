@@ -8,6 +8,7 @@ namespace PakSuzuki.Application.Features.Settings;
 public static class SettingKeys
 {
     public const string ShipToPartyAmountThreshold = "ShipToParty:AmountThreshold";
+    public const string ShipToPartyQuantityThreshold = "ShipToParty:QuantityThreshold";
 }
 
 public record SystemSettingDto(string Key, string Value);
@@ -41,7 +42,12 @@ public class GetSettingQueryHandler : IRequestHandler<GetSettingQuery, SystemSet
         if (setting != null) return new SystemSettingDto(setting.Key, setting.Value);
 
         // Sensible defaults when not yet seeded/migrated
-        var fallback = request.Key == SettingKeys.ShipToPartyAmountThreshold ? "10000000" : "";
+        var fallback = request.Key switch
+        {
+            SettingKeys.ShipToPartyQuantityThreshold => "1000",
+            SettingKeys.ShipToPartyAmountThreshold => "10000000",
+            _ => ""
+        };
         return new SystemSettingDto(request.Key, fallback);
     }
 }

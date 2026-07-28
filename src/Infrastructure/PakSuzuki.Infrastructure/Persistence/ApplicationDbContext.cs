@@ -45,6 +45,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
     public DbSet<OrderClaim> OrderClaims => Set<OrderClaim>();
     public DbSet<ClaimImage> ClaimImages => Set<ClaimImage>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
+    public DbSet<SapOutboundQueue> SapOutboundQueues => Set<SapOutboundQueue>();
     public DbSet<Target> Targets => Set<Target>();
     public DbSet<RegionalHeadAssignment> RegionalHeadAssignments => Set<RegionalHeadAssignment>();
 

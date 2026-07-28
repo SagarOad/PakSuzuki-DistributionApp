@@ -10,10 +10,11 @@ namespace PakSuzuki.Application.Features.Orders.Commands;
 
 // Covers both 3.3.1 (retailer order) and 3.3.3 (distributor direct order to Pak Suzuki):
 // RetailerId is null + Source=DistributorDirectOrder for the latter.
-public record CreateOrderItemDto(Guid ProductId, decimal Quantity, UnitOfMeasure Unit);
+public record CreateOrderItemDto(Guid ProductId, decimal Quantity, UnitOfMeasure Unit, Guid? ProductVariantId = null);
 
 public record CreateOrderCommand(
-    OrderSourceType Source, Guid? RetailerId, Guid DistributorId, List<CreateOrderItemDto> Items
+    OrderSourceType Source, Guid? RetailerId, Guid DistributorId, List<CreateOrderItemDto> Items,
+    Guid? OriginatingRetailerOrderId = null
 ) : IRequest<Guid>;
 
 public class CreateOrderCommandValidator : AbstractValidator<CreateOrderCommand>
@@ -74,11 +75,30 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
             ? OrderStatus.PendingPakSuzukiApproval
             : OrderStatus.PendingDistributorApproval;
 
+        Guid? originatingRetailerOrderId = null;
+        if (request.Source == OrderSourceType.DistributorDirectOrder
+            && request.OriginatingRetailerOrderId is Guid originId)
+        {
+            var origin = await _context.Orders.FirstOrDefaultAsync(o => o.Id == originId, ct)
+                ?? throw new NotFoundException(nameof(Domain.Entities.Order), originId);
+
+            if (origin.Source != OrderSourceType.RetailerOrder)
+                throw new ConflictException("Originating order must be a retailer order.");
+            if (origin.DistributorId != distributor.Id)
+                throw new ForbiddenAccessException("Originating retailer order is not under your distributorship.");
+            if (origin.Status is not (OrderStatus.PendingDistributorApproval or OrderStatus.SentBackForModification))
+                throw new ConflictException(
+                    $"Retailer order is in status '{origin.Status}' and cannot be ordered to manufacturer.");
+
+            originatingRetailerOrderId = origin.Id;
+        }
+
         var order = new Order
         {
             Source = request.Source,
             RetailerId = retailer?.Id,
             DistributorId = distributor.Id,
+            OriginatingRetailerOrderId = originatingRetailerOrderId,
             Status = initialStatus,
             OrderNumber = await GenerateOrderNumberAsync(request.Source, distributor.DistributorCode, retailer?.RetailerCode, ct)
         };
@@ -87,24 +107,51 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
 
         foreach (var item in request.Items)
         {
-            var product = await _context.Products.Include(p => p.PriceHistory)
+            var product = await _context.Products
+                .Include(p => p.PriceHistory)
+                .Include(p => p.Variants)
                 .FirstOrDefaultAsync(p => p.Id == item.ProductId, ct)
                 ?? throw new NotFoundException(nameof(Domain.Entities.Product), item.ProductId);
 
-            var currentPrice = product.PriceHistory.FirstOrDefault(pp => pp.IsCurrent)
-                ?? throw new ConflictException($"Product {product.Name} has no active price.");
+            ProductVariant? variant = null;
+            if (item.ProductVariantId is Guid variantId)
+            {
+                variant = product.Variants.FirstOrDefault(v => v.Id == variantId)
+                    ?? throw new NotFoundException(nameof(ProductVariant), variantId);
+            }
 
-            // Retailer orders are billed at SellingPrice (distributor's cost from PakSuzuki's
-            // perspective when forwarded) - simplified here as SellingPrice for both flows;
-            // adjust once finance confirms which tier applies to distributor-direct orders.
-            var unitPrice = currentPrice.SellingPrice;
+            var currentPrice = product.PriceHistory.FirstOrDefault(pp => pp.IsCurrent);
+            decimal unitPrice;
+            decimal gstPercent;
+            decimal fedPercent;
+
+            if (variant != null)
+            {
+                // Distributor direct orders use distributor price; retailer orders use retail.
+                unitPrice = request.Source == OrderSourceType.DistributorDirectOrder
+                    ? variant.DistributorPrice
+                    : variant.RetailPrice;
+                gstPercent = variant.GstPercent;
+                fedPercent = variant.FedPercent;
+            }
+            else
+            {
+                if (currentPrice is null)
+                    throw new ConflictException($"Product {product.Name} has no active price.");
+                unitPrice = currentPrice.SellingPrice;
+                gstPercent = currentPrice.GstPercent;
+                fedPercent = currentPrice.FedPercent;
+            }
+
             var lineSubTotal = unitPrice * item.Quantity;
-            var lineGst = lineSubTotal * currentPrice.GstPercent / 100;
-            var lineFed = lineSubTotal * currentPrice.FedPercent / 100;
+            var lineGst = lineSubTotal * gstPercent / 100;
+            var lineFed = lineSubTotal * fedPercent / 100;
 
             order.Items.Add(new OrderItem
             {
                 ProductId = product.Id,
+                ProductVariantId = variant?.Id,
+                VariantTypeName = variant?.TypeName,
                 RequestedQuantity = item.Quantity,
                 RequestedUnit = item.Unit,
                 UnitPrice = unitPrice,
@@ -116,9 +163,6 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
             subTotal += lineSubTotal;
             totalGst += lineGst;
             totalFed += lineFed;
-
-            // WHT is applied at the order-summary level (not per-product), using the
-            // highest configured WHT% among the order's products as a simple starting rule.
         }
 
         var whtPercent = 0m; // resolved below to avoid re-querying per item
@@ -137,6 +181,18 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
         if (retailer != null) retailer.LastOrderAtUtc = _dateTime.UtcNow;
 
         _context.Orders.Add(order);
+
+        // Mark the source retailer order as forwarded — Pak Suzuki processes the new distributor-direct order.
+        if (originatingRetailerOrderId is Guid linkedId)
+        {
+            var origin = await _context.Orders.FirstAsync(o => o.Id == linkedId, ct);
+            origin.Status = OrderStatus.ForwardedToPakSuzuki;
+            origin.DistributorActionedAtUtc = _dateTime.UtcNow;
+            origin.DistributorRemarks = string.IsNullOrWhiteSpace(origin.DistributorRemarks)
+                ? "Ordered to manufacturer (Pak Suzuki) by distributor."
+                : origin.DistributorRemarks;
+        }
+
         await _context.SaveChangesAsync(ct);
         return order.Id;
     }

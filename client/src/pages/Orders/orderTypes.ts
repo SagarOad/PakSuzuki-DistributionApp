@@ -6,6 +6,8 @@ export interface OrderLineItem {
   productBio?: string | null
   primaryImageUrl?: string | null
   categoryName?: string | null
+  productVariantId?: string | null
+  variantTypeName?: string | null
   requestedQuantity: number
   requestedUnit: string
   approvedQuantity?: number | null
@@ -51,6 +53,7 @@ export interface OrderDetail {
   sapInvoiceNumber?: string | null
   isPartialDelivery: boolean
   thresholdReached: boolean
+  originatingRetailerOrderId?: string | null
   distributorActionedAtUtc?: string | null
   pakSuzukiActionedAtUtc?: string | null
   invoiceConfirmedAtUtc?: string | null
@@ -123,4 +126,53 @@ export function formatOrderDate(iso: string) {
 export function locationLine(region?: string | null, address?: string | null) {
   const parts = [region, address?.split(',')[0]?.trim()].filter(Boolean)
   return parts.join(', ') || '—'
+}
+
+/** Qty to show after distributor action: approved when set, otherwise requested. */
+export function displayOrderQty(item: {
+  requestedQuantity: number
+  approvedQuantity?: number | null
+}) {
+  return item.approvedQuantity != null ? item.approvedQuantity : item.requestedQuantity
+}
+
+/** Line amount aligned with display qty (handles older partial rows before line snapshots were updated). */
+export function displayLineAmount(item: {
+  requestedQuantity: number
+  approvedQuantity?: number | null
+  unitPrice: number
+  lineSubTotal: number
+}) {
+  if (item.approvedQuantity == null) return item.lineSubTotal
+  return Math.round(item.unitPrice * item.approvedQuantity * 100) / 100
+}
+
+/** Design tracking steps under Order Summary for in-progress distributor / manufacture views. */
+export type TrackingStep = 'processed' | 'readyToShip' | 'delivered'
+
+export function getOrderTracking(status: string): {
+  processed: boolean
+  readyToShip: boolean
+  delivered: boolean
+  current: TrackingStep
+} {
+  const delivered = COMPLETED_STATUSES.includes(status)
+  const readyToShip =
+    delivered || status === 'SubmittedToSap' || status === 'PartiallyDelivered'
+  const processed =
+    delivered ||
+    readyToShip ||
+    ![
+      ...CANCELED_STATUSES,
+      'PendingDistributorApproval',
+      'SentBackForModification'
+    ].includes(status)
+
+  const current: TrackingStep = delivered
+    ? 'delivered'
+    : readyToShip
+      ? 'readyToShip'
+      : 'processed'
+
+  return { processed, readyToShip, delivered, current }
 }

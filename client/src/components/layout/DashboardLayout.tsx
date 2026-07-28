@@ -3,37 +3,67 @@ import { createPortal } from 'react-dom'
 import { NavLink, Outlet, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Truck, Package, Store, ShoppingBasket,
-  UsersRound, Bell, LogOut, CircleEllipsis, Image, FileBarChart2, Settings, Gift
+  UsersRound, Bell, LogOut, CircleEllipsis, Image, FileBarChart2, Settings, Gift,
+  Home, Car, Bike, Droplets, ClipboardList, ShoppingCart
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
+import { useCart } from '@/context/CartContext'
 import { SuzukiLogo, EcstarLogo } from '@/components/brand/Logos'
 import clsx from 'clsx'
 
-const allNavItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, roles: ['SuperAdmin', 'Admin', 'Distributor', 'RegionalHead'] },
-  { to: '/map', label: 'Map View', icon: Map, roles: ['SuperAdmin', 'Admin', 'Distributor', 'RegionalHead'] },
+const staffNavItems = [
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, roles: ['SuperAdmin', 'Admin', 'RegionalHead'] },
+  { to: '/map', label: 'Map View', icon: Map, roles: ['SuperAdmin', 'Admin', 'RegionalHead'] },
   { to: '/distributors', label: 'Distributors', icon: Truck, roles: ['SuperAdmin', 'Admin'] },
-  { to: '/retailers', label: 'Retailers', icon: Package, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
-  { to: '/shop', label: 'Shop', icon: Store, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
-  { to: '/orders', label: 'Orders', icon: ShoppingBasket, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
-  { to: '/claims', label: 'Claims', icon: UsersRound, roles: ['SuperAdmin', 'Admin', 'Distributor'] }
+  { to: '/retailers', label: 'Retailers', icon: Package, roles: ['SuperAdmin', 'Admin'] },
+  { to: '/shop', label: 'Shop', icon: Store, roles: ['SuperAdmin', 'Admin'] },
+  { to: '/orders', label: 'Orders', icon: ShoppingBasket, roles: ['SuperAdmin', 'Admin'] },
+  { to: '/claims', label: 'Claims', icon: UsersRound, roles: ['SuperAdmin', 'Admin'] }
 ]
 
-const moreLinks = [
+const distributorNavItems = [
+  { to: '/', label: 'Home', icon: Home, end: true },
+  { to: '/catalog/motor-car', label: 'Motor Car', icon: Car },
+  { to: '/catalog/motor-bike', label: 'Motor Bike', icon: Bike },
+  { to: '/catalog/all', label: 'All Lubricant', icon: Droplets },
+  { to: '/shop', label: 'My Shop', icon: Store },
+  { to: '/orders', label: 'My Orders', icon: ClipboardList },
+  { to: '/cart', label: 'Cart', icon: ShoppingCart }
+]
+
+const staffMoreLinks = [
   { to: '/promotions', label: 'Banner & Promotions', icon: Image, roles: ['SuperAdmin', 'Admin'] },
-  { to: '/reports', label: 'Reports', icon: FileBarChart2, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
-  { to: '/settings', label: 'Settings', icon: Settings, roles: ['SuperAdmin', 'Admin', 'Distributor'] },
+  { to: '/reports', label: 'Reports', icon: FileBarChart2, roles: ['SuperAdmin', 'Admin'] },
+  { to: '/settings', label: 'Settings', icon: Settings, roles: ['SuperAdmin', 'Admin'] },
   { to: '/incentives', label: 'Incentives', icon: Gift, roles: ['SuperAdmin', 'Admin'] }
 ]
 
-const moreActivePrefixes = ['/promotions', '/reports', '/settings', '/incentives', '/more']
+const distributorMoreLinks = [
+  { to: '/overview', label: 'Business Overview', icon: LayoutDashboard },
+  { to: '/retailers', label: 'My Retailers', icon: Package },
+  { to: '/claims', label: 'Claims', icon: UsersRound },
+  { to: '/map', label: 'Map View', icon: Map },
+  { to: '/reports', label: 'Reports', icon: FileBarChart2 },
+  { to: '/settings', label: 'Settings', icon: Settings }
+]
+
+const moreActivePrefixes = ['/promotions', '/reports', '/settings', '/incentives', '/more', '/overview', '/retailers', '/claims', '/map']
 
 export default function DashboardLayout() {
   const { userName, role, logout } = useAuth()
+  const { itemCount, justAdded } = useCart()
   const navigate = useNavigate()
   const location = useLocation()
-  const navItems = allNavItems.filter((item) => !role || item.roles.includes(role))
-  const moreItems = moreLinks.filter((item) => !role || item.roles.includes(role))
+  const isDistributor = role === 'Distributor'
+
+  const navItems = isDistributor
+    ? distributorNavItems
+    : staffNavItems.filter((item) => !role || item.roles.includes(role))
+
+  const moreItems = isDistributor
+    ? distributorMoreLinks
+    : staffMoreLinks.filter((item) => !role || item.roles.includes(role))
+
   const [moreOpen, setMoreOpen] = useState(false)
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
   const moreBtnRef = useRef<HTMLButtonElement>(null)
@@ -87,21 +117,36 @@ export default function DashboardLayout() {
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={item.end}
+                end={'end' in item ? item.end : false}
                 className={({ isActive }) =>
                   clsx(
-                    'nav-item shrink-0 min-w-[52px] md:min-w-[72px]',
+                    'nav-item shrink-0 min-w-[52px] md:min-w-[72px] relative',
                     isActive && 'nav-item-active'
                   )
                 }
               >
                 {({ isActive }) => (
                   <>
-                    <item.icon
-                      size={20}
-                      strokeWidth={isActive ? 2.4 : 1.8}
-                      className={isActive ? 'text-suzuki-red' : 'text-suzuki-mute'}
-                    />
+                    <span className="relative">
+                      <item.icon
+                        size={20}
+                        strokeWidth={isActive ? 2.4 : 1.8}
+                        className={clsx(
+                          isActive ? 'text-suzuki-red' : 'text-suzuki-mute',
+                          item.to === '/cart' && justAdded && 'animate-bounce'
+                        )}
+                      />
+                      {item.to === '/cart' && itemCount > 0 && (
+                        <span
+                          className={clsx(
+                            'absolute -top-1.5 -right-2 min-w-[16px] h-4 px-1 rounded-full bg-suzuki-red text-white text-[9px] font-bold inline-flex items-center justify-center',
+                            justAdded && 'ring-2 ring-suzuki-red/40 scale-110'
+                          )}
+                        >
+                          {itemCount > 99 ? '99+' : itemCount}
+                        </span>
+                      )}
+                    </span>
                     <span className="hidden md:inline">{item.label}</span>
                   </>
                 )}
@@ -188,6 +233,31 @@ export default function DashboardLayout() {
       <main className="flex-1 mx-auto w-full max-w-[1440px] px-3 sm:px-4 lg:px-6 py-4 sm:py-5 min-w-0">
         <Outlet />
       </main>
+
+      {/* Floating cart — appears after Add to Cart / when cart has items */}
+      {isDistributor && itemCount > 0 && location.pathname !== '/cart' && (
+        <button
+          type="button"
+          onClick={() => navigate('/cart')}
+          className={clsx(
+            'fixed bottom-6 right-5 z-[90] h-14 w-14 rounded-full bg-suzuki-red text-white shadow-lg',
+            'inline-flex items-center justify-center hover:bg-red-700 transition-transform',
+            justAdded && 'scale-110'
+          )}
+          aria-label={`Open cart (${itemCount})`}
+        >
+          <ShoppingCart size={22} />
+          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-white text-suzuki-red text-[11px] font-extrabold inline-flex items-center justify-center border border-suzuki-red">
+            {itemCount > 99 ? '99+' : itemCount}
+          </span>
+        </button>
+      )}
+
+      {isDistributor && justAdded && (
+        <div className="fixed bottom-24 right-5 z-[90] rounded-xl bg-suzuki-navy text-white text-sm font-semibold px-4 py-2.5 shadow-card">
+          Added to cart
+        </div>
+      )}
 
       <footer className="py-4 text-center text-xs text-suzuki-mute">
         © Copyright {new Date().getFullYear()} Pakistan Suzuki

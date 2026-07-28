@@ -15,10 +15,19 @@ public class DistributorsController : BaseApiController
 
     [HttpPost("register")]
     [AllowAnonymous]
-    public async Task<IActionResult> Register(RegisterDistributorCommand command)
+    [Consumes("application/json")]
+    public async Task<IActionResult> Register([FromBody] RegisterDistributorRequest request)
     {
-        var id = await Mediator.Send(command);
-        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+        var id = await Mediator.Send(new RegisterDistributorCommand(
+            request.Name, request.Cnic, request.MobileNumber, request.Email, request.Password,
+            request.BusinessName, request.Ntn, request.Iban, request.BusinessAddress,
+            request.Latitude, request.Longitude, request.RegionId, request.BusinessImageUrls));
+        return CreatedAtAction(nameof(GetById), new { id }, new
+        {
+            id,
+            message = "Registered. Upload images via POST /api/distributors/business-images/{id}.",
+            nextStep = $"POST /api/distributors/business-images/{id}"
+        });
     }
 
     /// <summary>Approved distributors for retailer signup (mobile). No auth required.</summary>
@@ -114,15 +123,26 @@ public class DistributorsController : BaseApiController
     }
 
     [HttpPost("business-images/{id:guid}")]
-    [Authorize(Policy = "AdminOrAbove")]
+    [AllowAnonymous]
     [RequestSizeLimit(50_000_000)]
     public async Task<IActionResult> UploadBusinessImages(Guid id, [FromForm] List<IFormFile> files)
     {
-        var payloads = files.Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
+        if (files is null || files.Count == 0)
+            return BadRequest(new { title = "Validation failed", errors = new { files = new[] { "At least one image file is required (form field name: files)." } } });
+
+        var payloads = files.Where(f => f.Length > 0).Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
+        if (payloads.Count == 0)
+            return BadRequest(new { title = "Validation failed", errors = new { files = new[] { "Uploaded files were empty." } } });
+
         var urls = await Mediator.Send(new UploadDistributorBusinessImagesCommand(id, payloads));
-        return Ok(new { urls });
+        return Ok(new { urls, message = "Images uploaded. Await Super Admin approval." });
     }
 }
+
+public record RegisterDistributorRequest(
+    string Name, string Cnic, string MobileNumber, string Email, string Password,
+    string BusinessName, string Ntn, string Iban, string BusinessAddress,
+    double Latitude, double Longitude, Guid RegionId, List<string>? BusinessImageUrls = null);
 
 public record ApproveDistributorRequest(ApprovalStatus Decision, string? Remarks);
 public record UpdateDistributorRequest(

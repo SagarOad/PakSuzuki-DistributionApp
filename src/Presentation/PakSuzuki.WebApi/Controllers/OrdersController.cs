@@ -28,13 +28,39 @@ public class OrdersController : BaseApiController
         return CreatedAtAction(nameof(GetById), new { id }, new { id });
     }
 
+    /// <summary>
+    /// Retailer resubmits the <b>same</b> order after SentBackForModification (does not create a new order).
+    /// Optional items update quantities; status returns to PendingDistributorApproval.
+    /// Distributor note remains on distributorRemarks for the retailer app to show.
+    /// </summary>
+    [HttpPost("retailer-resubmit/{orderId:guid}")]
+    [Authorize(Policy = "RetailerOnly")]
+    public async Task<IActionResult> RetailerResubmit(Guid orderId, ResubmitOrderBody body)
+    {
+        await Mediator.Send(new ResubmitOrderCommand(orderId, body.Remarks, body.Items));
+        return NoContent();
+    }
+
+    /// <summary>Retailer cancels own pending / sent-back order.</summary>
+    [HttpPost("retailer-cancel/{orderId:guid}")]
+    [Authorize(Policy = "RetailerOnly")]
+    public async Task<IActionResult> RetailerCancel(Guid orderId, [FromBody] CancelOrderBody? body)
+    {
+        await Mediator.Send(new CancelRetailerOrderCommand(orderId, body?.Remarks));
+        return NoContent();
+    }
+
     [HttpPost("distributor-direct")]
     [Authorize(Policy = "DistributorOnly")]
-    public async Task<IActionResult> CreateDistributorDirect(List<CreateOrderItemDto> items)
+    public async Task<IActionResult> CreateDistributorDirect(CreateDistributorDirectBody body)
     {
         var distributorId = _currentUser.DistributorId ?? throw new UnauthorizedAccessException();
         var id = await Mediator.Send(new CreateOrderCommand(
-            OrderSourceType.DistributorDirectOrder, null, distributorId, items));
+            OrderSourceType.DistributorDirectOrder,
+            null,
+            distributorId,
+            body.Items,
+            body.OriginatingRetailerOrderId));
         return CreatedAtAction(nameof(GetById), new { id }, new { id });
     }
 
@@ -42,6 +68,7 @@ public class OrdersController : BaseApiController
     public async Task<IActionResult> GetOrders(
         [FromQuery] string? statusFilter,
         [FromQuery] string? search,
+        [FromQuery] string? source,
         [FromQuery] Guid? distributorId,
         [FromQuery] Guid? retailerId,
         [FromQuery] int pageNumber = 1,
@@ -49,6 +76,7 @@ public class OrdersController : BaseApiController
     {
         Guid? distributorScope;
         Guid? retailerScope;
+        var pakSuzukiWorkQueueOnly = false;
 
         if (_currentUser.Role == Roles.Distributor)
         {
@@ -66,13 +94,15 @@ public class OrdersController : BaseApiController
         }
         else
         {
-            // SuperAdmin / Admin / RegionalHead: allow explicit filters for profile pages
+            // SuperAdmin / Admin / RegionalHead: default work queue is manufacturer + Ship-to-Party only
             distributorScope = distributorId;
             retailerScope = retailerId;
+            pakSuzukiWorkQueueOnly = distributorId is null && retailerId is null && source is null;
         }
 
         return Ok(await Mediator.Send(new GetOrdersQuery(
-            distributorScope, retailerScope, statusFilter, search, pageNumber, pageSize)));
+            distributorScope, retailerScope, statusFilter, search, source,
+            pakSuzukiWorkQueueOnly, pageNumber, pageSize)));
     }
 
     [HttpGet("{id:guid}")]
@@ -83,6 +113,14 @@ public class OrdersController : BaseApiController
         return Ok(await Mediator.Send(new GetOrderByIdQuery(id, distributorScope, retailerScope)));
     }
 
+    /// <summary>
+    /// Distributor actions on a pending retailer order:
+    /// ApprovedByDistributor (full from inventory),
+    /// PartiallyApprovedByDistributor + amendedItems (partial from inventory),
+    /// ForwardedToPakSuzuki (cannot fulfill → Pak Suzuki),
+    /// SentBackForModification + amendedItems (send amendments to retailer),
+    /// RejectedByDistributor.
+    /// </summary>
     [HttpPost("distributor-action/{orderId:guid}")]
     [Authorize(Policy = "DistributorOnly")]
     public async Task<IActionResult> DistributorAction(Guid orderId, ApproveOrderBody body)
@@ -113,9 +151,20 @@ public class OrdersController : BaseApiController
         Ok(await Mediator.Send(new RefreshSapStatusCommand(orderId)));
 
     [HttpPatch("status/{orderId:guid}")]
-    [Authorize(Policy = "AdminOrAbove")]
+    [Authorize]
     public async Task<IActionResult> UpdateStatus(Guid orderId, UpdateOrderStatusBody body)
     {
+        // Distributors may advance delivery statuses on their own orders only.
+        if (_currentUser.Role == Roles.Distributor)
+        {
+            if (body.Status is not (OrderStatus.PartiallyDelivered or OrderStatus.Delivered or OrderStatus.ApprovedByDistributor))
+                return Forbid();
+        }
+        else if (_currentUser.Role is not (Roles.SuperAdmin or Roles.Admin))
+        {
+            return Forbid();
+        }
+
         await Mediator.Send(new UpdateOrderStatusCommand(orderId, body.Status, body.Remarks));
         return NoContent();
     }
@@ -145,5 +194,8 @@ public class OrdersController : BaseApiController
 }
 
 public record ApproveOrderBody(OrderStatus Decision, string? Remarks, List<ApproveOrderItemDto>? AmendedItems);
+public record ResubmitOrderBody(string? Remarks, List<ResubmitOrderItemDto>? Items);
+public record CancelOrderBody(string? Remarks);
+public record CreateDistributorDirectBody(List<CreateOrderItemDto> Items, Guid? OriginatingRetailerOrderId = null);
 public record PakSuzukiActionBody(OrderStatus Decision, string? Remarks);
 public record UpdateOrderStatusBody(OrderStatus Status, string? Remarks);

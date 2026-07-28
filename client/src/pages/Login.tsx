@@ -227,6 +227,15 @@ export default function Login() {
                     Register here
                   </Link>
                 </p>
+                <p className="pt-2 text-sm text-white/70">
+                  New retailer?{' '}
+                  <Link
+                    to="/register/retailer"
+                    className="font-semibold text-white underline underline-offset-2 hover:text-suzuki-sky"
+                  >
+                    Register here
+                  </Link>
+                </p>
               </form>
             )}
 

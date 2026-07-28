@@ -18,6 +18,14 @@ public class Order : EntityWithDomainEvents
     public Guid DistributorId { get; set; }
     public Distributor Distributor { get; set; } = default!;
 
+    /// <summary>
+    /// When a distributor places a Manufacturer (Pak Suzuki) order because they could not
+    /// fulfill a retailer order from inventory, this links back to that retailer order.
+    /// Super Admin still treats the new order as a normal DistributorDirectOrder.
+    /// </summary>
+    public Guid? OriginatingRetailerOrderId { get; set; }
+    public Order? OriginatingRetailerOrder { get; set; }
+
     public OrderStatus Status { get; set; } = OrderStatus.PendingDistributorApproval;
 
     public string? DistributorRemarks { get; set; }

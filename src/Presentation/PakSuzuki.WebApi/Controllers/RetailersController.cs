@@ -14,10 +14,57 @@ public class RetailersController : BaseApiController
 
     [HttpPost("register")]
     [AllowAnonymous]
-    public async Task<IActionResult> Register(RegisterRetailerCommand command)
+    [Consumes("application/json")]
+    public async Task<IActionResult> Register([FromBody] RegisterRetailerRequest request)
     {
-        var id = await Mediator.Send(command);
-        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+        var result = await Mediator.Send(new RegisterRetailerCommand(
+            request.Name, request.Cnic, request.MobileNumber, request.Email, request.Password,
+            request.BusinessName, request.Ntn, request.Iban, request.BusinessAddress,
+            request.Latitude, request.Longitude, request.DistributorId, request.BusinessImageUrls));
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, new
+        {
+            id = result.Id,
+            distributorId = result.DistributorId,
+            distributorName = result.DistributorName,
+            distanceKm = result.DistanceKm,
+            message = "Registered and assigned to nearest/selected distributor. Upload business images via POST /api/retailers/business-images/{id}, then wait for distributor + Super Admin approval.",
+            nextStep = $"POST /api/retailers/business-images/{result.Id}"
+        });
+    }
+
+    /// <summary>
+    /// Register retailer with business images in one multipart request (mobile-friendly).
+    /// Form fields match JSON register; files field name: files.
+    /// Omit distributorId to auto-assign the nearest approved distributor from lat/long.
+    /// </summary>
+    [HttpPost("register-with-images")]
+    [AllowAnonymous]
+    [RequestSizeLimit(50_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> RegisterWithImages(
+        [FromForm] RegisterRetailerRequest request,
+        [FromForm] List<IFormFile>? files)
+    {
+        var result = await Mediator.Send(new RegisterRetailerCommand(
+            request.Name, request.Cnic, request.MobileNumber, request.Email, request.Password,
+            request.BusinessName, request.Ntn, request.Iban, request.BusinessAddress,
+            request.Latitude, request.Longitude, request.DistributorId, null));
+
+        if (files is { Count: > 0 })
+        {
+            var payloads = files.Where(f => f.Length > 0)
+                .Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
+            if (payloads.Count > 0)
+                await Mediator.Send(new UploadRetailerBusinessImagesCommand(result.Id, payloads));
+        }
+
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, new
+        {
+            id = result.Id,
+            distributorId = result.DistributorId,
+            distributorName = result.DistributorName,
+            distanceKm = result.DistanceKm
+        });
     }
 
     [HttpGet]
@@ -99,11 +146,28 @@ public class RetailersController : BaseApiController
     }
 
     [HttpPost("business-images/{id:guid}")]
-    [Authorize]
+    [AllowAnonymous]
     [RequestSizeLimit(50_000_000)]
     public async Task<IActionResult> UploadBusinessImages(Guid id, [FromForm] List<IFormFile> files)
     {
-        var payloads = files.Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
+        if (files is null || files.Count == 0)
+            return BadRequest(new
+            {
+                title = "Validation failed",
+                status = 400,
+                errors = new { files = new[] { "At least one image file is required (form field name: files)." } }
+            });
+
+        var payloads = files.Where(f => f.Length > 0)
+            .Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
+        if (payloads.Count == 0)
+            return BadRequest(new
+            {
+                title = "Validation failed",
+                status = 400,
+                errors = new { files = new[] { "Uploaded files were empty." } }
+            });
+
         var urls = await Mediator.Send(new UploadRetailerBusinessImagesCommand(id, payloads));
         return Ok(new { urls });
     }
@@ -136,6 +200,10 @@ public class RetailersController : BaseApiController
 }
 
 public record RetailerApprovalRequest(ApprovalStatus Decision, string? Remarks);
+public record RegisterRetailerRequest(
+    string Name, string Cnic, string MobileNumber, string Email, string Password,
+    string BusinessName, string Ntn, string Iban, string BusinessAddress,
+    double Latitude, double Longitude, Guid? DistributorId = null, List<string>? BusinessImageUrls = null);
 public record UpdateRetailerRequest(
     string Name, string MobileNumber, string Email, string BusinessName,
     string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude);

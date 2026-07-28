@@ -84,9 +84,12 @@ public class SubmitOrderToSapCommandHandler : IRequestHandler<SubmitOrderToSapCo
 
         var result = await _sapIntegration.SubmitOrderAsync(order.Id, ct);
         if (!result.Success)
-            throw new ConflictException(result.ErrorMessage ?? "SAP rejected the order submission.");
+            throw new ConflictException(result.ErrorMessage ?? "SAP queue rejected the order submission.");
 
-        order.SapDocumentNumber = result.SapDocumentNumber;
+        // Document number is filled later by middleware when SAP confirms.
+        if (!string.IsNullOrWhiteSpace(result.SapDocumentNumber))
+            order.SapDocumentNumber = result.SapDocumentNumber;
+
         order.Status = OrderStatus.SubmittedToSap;
 
         await _context.SaveChangesAsync(ct);
@@ -145,36 +148,6 @@ public class RefreshSapStatusCommandHandler : IRequestHandler<RefreshSapStatusCo
         return new SapStatusDto(
             order.SapDocumentNumber, order.SapDeliveryNumber, order.SapGrnNumber, order.SapInvoiceNumber,
             status.IsInvoiced, order.Status.ToString());
-    }
-}
-
-// Manual override for SuperAdmin - e.g. correcting a status after an out-of-band
-// SAP reconciliation issue. Bypasses the normal workflow transitions on purpose.
-public record UpdateOrderStatusCommand(Guid OrderId, OrderStatus Status, string? Remarks) : IRequest;
-
-public class UpdateOrderStatusCommandValidator : AbstractValidator<UpdateOrderStatusCommand>
-{
-    public UpdateOrderStatusCommandValidator()
-    {
-        RuleFor(x => x.OrderId).NotEmpty();
-        RuleFor(x => x.Status).IsInEnum();
-    }
-}
-
-public class UpdateOrderStatusCommandHandler : IRequestHandler<UpdateOrderStatusCommand>
-{
-    private readonly IApplicationDbContext _context;
-    public UpdateOrderStatusCommandHandler(IApplicationDbContext context) => _context = context;
-
-    public async Task Handle(UpdateOrderStatusCommand request, CancellationToken ct)
-    {
-        var order = await _context.Orders.FirstOrDefaultAsync(o => o.Id == request.OrderId, ct)
-            ?? throw new NotFoundException(nameof(Domain.Entities.Order), request.OrderId);
-
-        order.Status = request.Status;
-        if (request.Remarks != null) order.PakSuzukiRemarks = request.Remarks;
-
-        await _context.SaveChangesAsync(ct);
     }
 }
 

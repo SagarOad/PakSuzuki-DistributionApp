@@ -8,9 +8,8 @@ using PakSuzuki.Domain.Enums;
 
 namespace PakSuzuki.Application.Features.Retailers.Commands;
 
-// 3.4: once a retailer's cumulative order quantity/amount crosses a configurable threshold,
-// they become eligible for direct Ship-to-Party delivery from Pak Suzuki (bypassing
-// their distributor) and get their own SAP Business Partner code.
+// 3.4: quantity-based Ship-to-Party eligibility. When cumulative approved qty
+// crosses the threshold, retailer can receive direct Pak Suzuki delivery (BP in SAP).
 public record ShipToPartyEligibilityDto(
     bool IsEligible, decimal CurrentQuantity, decimal Threshold,
     bool HasSapBpCode, string? SapBusinessPartnerCode);
@@ -19,11 +18,11 @@ public record GetShipToPartyEligibilityQuery(Guid RetailerId) : IRequest<ShipToP
 
 public class GetShipToPartyEligibilityQueryHandler : IRequestHandler<GetShipToPartyEligibilityQuery, ShipToPartyEligibilityDto>
 {
-    private const decimal DefaultThreshold = 10_000_000m;
+    private const decimal DefaultQuantityThreshold = 1000m;
 
     private static readonly OrderStatus[] ExcludedStatuses =
     {
-        OrderStatus.RejectedByDistributor, OrderStatus.Cancelled
+        OrderStatus.RejectedByDistributor, OrderStatus.Cancelled, OrderStatus.SentBackForModification
     };
 
     private readonly IApplicationDbContext _context;
@@ -40,16 +39,15 @@ public class GetShipToPartyEligibilityQueryHandler : IRequestHandler<GetShipToPa
         var retailer = await _context.Retailers.FirstOrDefaultAsync(r => r.Id == request.RetailerId, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Retailer), request.RetailerId);
 
-        var threshold = await ResolveThresholdAsync(ct);
+        var threshold = await ResolveQuantityThresholdAsync(ct);
 
-        // Prefer order grand totals (amount threshold from Settings UI).
-        var currentAmount = await _context.Orders
-            .Where(o => o.RetailerId == request.RetailerId)
-            .Where(o => (int)o.Status >= (int)OrderStatus.ApprovedByDistributor)
-            .Where(o => !ExcludedStatuses.Contains(o.Status))
-            .SumAsync(o => (decimal?)o.GrandTotal, ct) ?? 0m;
+        var currentQuantity = await _context.OrderItems
+            .Where(i => i.Order.RetailerId == request.RetailerId)
+            .Where(i => (int)i.Order.Status >= (int)OrderStatus.ApprovedByDistributor)
+            .Where(i => !ExcludedStatuses.Contains(i.Order.Status))
+            .SumAsync(i => (decimal?)(i.ApprovedQuantity ?? i.RequestedQuantity), ct) ?? 0m;
 
-        var isEligible = currentAmount >= threshold;
+        var isEligible = currentQuantity >= threshold;
 
         if (isEligible != retailer.IsEligibleForDirectShipToParty)
         {
@@ -58,29 +56,31 @@ public class GetShipToPartyEligibilityQueryHandler : IRequestHandler<GetShipToPa
         }
 
         return new ShipToPartyEligibilityDto(
-            isEligible, currentAmount, threshold,
+            isEligible, currentQuantity, threshold,
             !string.IsNullOrEmpty(retailer.SapBusinessPartnerCode), retailer.SapBusinessPartnerCode);
     }
 
-    private async Task<decimal> ResolveThresholdAsync(CancellationToken ct)
+    private async Task<decimal> ResolveQuantityThresholdAsync(CancellationToken ct)
     {
-        var setting = await _context.SystemSettings
+        var qtySetting = await _context.SystemSettings
+            .FirstOrDefaultAsync(s => s.Key == SettingKeys.ShipToPartyQuantityThreshold, ct);
+        if (qtySetting != null && decimal.TryParse(qtySetting.Value, out var fromQtyDb))
+            return fromQtyDb;
+
+        // Legacy amount key still accepted as numeric threshold until Settings UI migrates.
+        var amountSetting = await _context.SystemSettings
             .FirstOrDefaultAsync(s => s.Key == SettingKeys.ShipToPartyAmountThreshold, ct);
-        if (setting != null && decimal.TryParse(setting.Value, out var fromDb))
-            return fromDb;
+        if (amountSetting != null && decimal.TryParse(amountSetting.Value, out var fromAmountDb)
+            && fromAmountDb < 100_000m)
+            return fromAmountDb;
 
-        if (decimal.TryParse(_configuration["ShipToParty:AmountThreshold"], out var fromConfig))
+        if (decimal.TryParse(_configuration["ShipToParty:QuantityThreshold"], out var fromConfig))
             return fromConfig;
-        if (decimal.TryParse(_configuration["ShipToParty:QuantityThreshold"], out var legacy))
-            return legacy;
 
-        return DefaultThreshold;
+        return DefaultQuantityThreshold;
     }
 }
 
-// Creates the SAP Business Partner record for a Ship-to-Party-eligible retailer.
-// Stubbed as a deterministic code here; replace with a real ISapIntegrationService
-// call once Pak Suzuki shares the BP-creation SAP endpoint spec.
 public record CreateShipToPartyBpCommand(Guid RetailerId) : IRequest<string>;
 
 public class CreateShipToPartyBpCommandHandler : IRequestHandler<CreateShipToPartyBpCommand, string>
@@ -100,6 +100,20 @@ public class CreateShipToPartyBpCommandHandler : IRequestHandler<CreateShipToPar
             retailer.SapBusinessPartnerCode = $"BP{retailer.RetailerCode}";
 
         retailer.IsEligibleForDirectShipToParty = true;
+
+        // Queue BP creation for middleware/SAP (payload schema TBD).
+        _context.SapOutboundQueues.Add(new Domain.Entities.SapOutboundQueue
+        {
+            QueueType = "BpCreate",
+            Status = "Pending",
+            CorrelationKey = retailer.RetailerCode,
+            PayloadJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                retailerId = retailer.Id,
+                retailerCode = retailer.RetailerCode,
+                sapBusinessPartnerCode = retailer.SapBusinessPartnerCode
+            })
+        });
 
         await _context.SaveChangesAsync(ct);
         return retailer.SapBusinessPartnerCode;

@@ -436,6 +436,9 @@ namespace PakSuzuki.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
 
+                    b.Property<Guid?>("OriginatingRetailerOrderId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<DateTime?>("PakSuzukiActionedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -481,6 +484,8 @@ namespace PakSuzuki.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("OrderNumber")
                         .IsUnique();
+
+                    b.HasIndex("OriginatingRetailerOrderId");
 
                     b.HasIndex("RetailerId");
 
@@ -1234,12 +1239,19 @@ namespace PakSuzuki.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("PakSuzuki.Domain.Entities.Order", "OriginatingRetailerOrder")
+                        .WithMany()
+                        .HasForeignKey("OriginatingRetailerOrderId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.HasOne("PakSuzuki.Domain.Entities.Retailer", "Retailer")
                         .WithMany("Orders")
                         .HasForeignKey("RetailerId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Distributor");
+
+                    b.Navigation("OriginatingRetailerOrder");
 
                     b.Navigation("Retailer");
                 });
