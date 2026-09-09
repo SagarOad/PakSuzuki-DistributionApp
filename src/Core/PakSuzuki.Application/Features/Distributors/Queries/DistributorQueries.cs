@@ -9,7 +9,8 @@ namespace PakSuzuki.Application.Features.Distributors.Queries;
 
 public record DistributorListDto(
     Guid Id, string DistributorCode, string Name, string BusinessName, string RegionName,
-    string ApprovalStatus, bool IsActive, string Email, string MobileNumber, DateTime CreatedAtUtc);
+    string ApprovalStatus, bool IsActive, string Email, string MobileNumber, DateTime CreatedAtUtc,
+    string? ProfileImageUrl);
 
 public record GetDistributorsQuery(
     Guid? RegionId, string? Status, string? Search, int PageNumber = 1, int PageSize = 20
@@ -32,7 +33,8 @@ public class GetDistributorsQueryHandler : IRequestHandler<GetDistributorsQuery,
             .OrderByDescending(d => d.CreatedAtUtc)
             .Select(d => new DistributorListDto(
                 d.Id, d.DistributorCode, d.Name, d.BusinessName, d.Region.Name,
-                d.ApprovalStatus.ToString(), d.IsActive, d.Email, d.MobileNumber, d.CreatedAtUtc));
+                d.ApprovalStatus.ToString(), d.IsActive, d.Email, d.MobileNumber, d.CreatedAtUtc,
+                d.ProfileImageUrl));
 
         return await PaginatedList<DistributorListDto>.CreateAsync(query, request.PageNumber, request.PageSize);
     }
@@ -79,7 +81,8 @@ public class GetPendingDistributorsQueryHandler : IRequestHandler<GetPendingDist
             .OrderBy(d => d.CreatedAtUtc)
             .Select(d => new DistributorListDto(
                 d.Id, d.DistributorCode, d.Name, d.BusinessName, d.Region.Name,
-                d.ApprovalStatus.ToString(), d.IsActive, d.Email, d.MobileNumber, d.CreatedAtUtc));
+                d.ApprovalStatus.ToString(), d.IsActive, d.Email, d.MobileNumber, d.CreatedAtUtc,
+                d.ProfileImageUrl));
 
         return await PaginatedList<DistributorListDto>.CreateAsync(query, request.PageNumber, request.PageSize);
     }
@@ -91,7 +94,8 @@ public record DistributorDetailDto(
     Guid Id, string DistributorCode, string Name, string Cnic, string MobileNumber, string Email,
     string BusinessName, string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude,
     Guid RegionId, string RegionName, string ApprovalStatus, string? ApprovalRemarks, DateTime? ApprovedAtUtc,
-    bool IsActive, DateTime CreatedAtUtc, List<DistributorImageDto> Images);
+    bool IsActive, DateTime CreatedAtUtc, string? ProfileImageUrl, List<DistributorImageDto> Images,
+    string? SapDealerCode, string? SapShipToCode);
 
 public record GetDistributorByIdQuery(Guid Id) : IRequest<DistributorDetailDto>;
 
@@ -114,6 +118,8 @@ public class GetDistributorByIdQueryHandler : IRequestHandler<GetDistributorById
             distributor.Iban, distributor.BusinessAddress, distributor.Latitude, distributor.Longitude,
             distributor.RegionId, distributor.Region.Name, distributor.ApprovalStatus.ToString(),
             distributor.ApprovalRemarks, distributor.ApprovedAtUtc, distributor.IsActive, distributor.CreatedAtUtc,
-            distributor.BusinessImages.Select(i => new DistributorImageDto(i.Id, i.StorageUrl, i.FileName)).ToList());
+            distributor.ProfileImageUrl,
+            distributor.BusinessImages.Select(i => new DistributorImageDto(i.Id, i.StorageUrl, i.FileName)).ToList(),
+            distributor.SapDealerCode, distributor.SapShipToCode);
     }
 }

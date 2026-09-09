@@ -148,25 +148,36 @@ public class UploadRetailerBusinessImagesCommandHandler
 
     private readonly IApplicationDbContext _context;
     private readonly IFileStorageService _fileStorage;
+    private readonly ICurrentUserService _currentUser;
 
-    public UploadRetailerBusinessImagesCommandHandler(IApplicationDbContext context, IFileStorageService fileStorage)
+    public UploadRetailerBusinessImagesCommandHandler(
+        IApplicationDbContext context, IFileStorageService fileStorage, ICurrentUserService currentUser)
     {
         _context = context;
         _fileStorage = fileStorage;
+        _currentUser = currentUser;
     }
 
     public async Task<List<string>> Handle(UploadRetailerBusinessImagesCommand request, CancellationToken ct)
     {
-        var retailer = await _context.Retailers.Include(r => r.BusinessImages)
+        var retailer = await _context.Retailers
             .FirstOrDefaultAsync(r => r.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Retailer), request.Id);
+
+        var isStaff = _currentUser.IsInRole(Roles.SuperAdmin) || _currentUser.IsInRole(Roles.Admin);
+        var isSelf = _currentUser.RetailerId == retailer.Id;
+        var isOwningDistributor = _currentUser.DistributorId == retailer.DistributorId;
+        if (!isStaff && !isSelf && !isOwningDistributor)
+            throw new ForbiddenAccessException("You can only upload images for your own shop.");
 
         var uploadedUrls = new List<string>();
 
         foreach (var file in request.Files)
         {
             var url = await _fileStorage.UploadAsync(file.Content, file.FileName, ContainerName, ct);
-            retailer.BusinessImages.Add(new BusinessImage
+            // Added through the DbSet on purpose: Ids are assigned in the entity, so adding to the
+            // parent's tracked collection would make EF treat the new row as an update.
+            _context.BusinessImages.Add(new BusinessImage
             {
                 RetailerId = retailer.Id,
                 StorageUrl = url,
@@ -180,6 +191,51 @@ public class UploadRetailerBusinessImagesCommandHandler
     }
 }
 
+public record UploadRetailerProfileImageCommand(Guid Id, string FileName, Stream Content) : IRequest<string>;
+
+public class UploadRetailerProfileImageCommandValidator : AbstractValidator<UploadRetailerProfileImageCommand>
+{
+    public UploadRetailerProfileImageCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.FileName).NotEmpty();
+        RuleFor(x => x.Content).NotNull();
+    }
+}
+
+public class UploadRetailerProfileImageCommandHandler : IRequestHandler<UploadRetailerProfileImageCommand, string>
+{
+    private const string ContainerName = "retailer-profiles";
+    private readonly IApplicationDbContext _context;
+    private readonly IFileStorageService _fileStorage;
+    private readonly ICurrentUserService _currentUser;
+
+    public UploadRetailerProfileImageCommandHandler(
+        IApplicationDbContext context, IFileStorageService fileStorage, ICurrentUserService currentUser)
+    {
+        _context = context;
+        _fileStorage = fileStorage;
+        _currentUser = currentUser;
+    }
+
+    public async Task<string> Handle(UploadRetailerProfileImageCommand request, CancellationToken ct)
+    {
+        var retailer = await _context.Retailers.FirstOrDefaultAsync(r => r.Id == request.Id, ct)
+            ?? throw new NotFoundException(nameof(Domain.Entities.Retailer), request.Id);
+
+        var isStaff = _currentUser.IsInRole(Roles.SuperAdmin) || _currentUser.IsInRole(Roles.Admin);
+        var isSelf = _currentUser.RetailerId == retailer.Id;
+        var isOwningDistributor = _currentUser.DistributorId == retailer.DistributorId;
+        if (!isStaff && !isSelf && !isOwningDistributor)
+            throw new ForbiddenAccessException("You can only upload your own retailer profile image.");
+
+        var url = await _fileStorage.UploadAsync(request.Content, request.FileName, ContainerName, ct);
+        retailer.ProfileImageUrl = url;
+        await _context.SaveChangesAsync(ct);
+        return url;
+    }
+}
+
 public record UnblockRetailerCommand(Guid Id) : IRequest;
 
 public class UnblockRetailerCommandValidator : AbstractValidator<UnblockRetailerCommand>
@@ -190,7 +246,13 @@ public class UnblockRetailerCommandValidator : AbstractValidator<UnblockRetailer
 public class UnblockRetailerCommandHandler : IRequestHandler<UnblockRetailerCommand>
 {
     private readonly IApplicationDbContext _context;
-    public UnblockRetailerCommandHandler(IApplicationDbContext context) => _context = context;
+    private readonly IIdentityService _identity;
+
+    public UnblockRetailerCommandHandler(IApplicationDbContext context, IIdentityService identity)
+    {
+        _context = context;
+        _identity = identity;
+    }
 
     public async Task Handle(UnblockRetailerCommand request, CancellationToken ct)
     {
@@ -199,7 +261,85 @@ public class UnblockRetailerCommandHandler : IRequestHandler<UnblockRetailerComm
 
         retailer.IsBlocked = false;
         retailer.BlockedAtUtc = null;
+        retailer.IsActive = true;
+        await _identity.SetUserActiveAsync(retailer.ApplicationUserId, true, ct);
+        await _identity.TouchLastLoginAsync(retailer.ApplicationUserId, ct);
+        await _context.SaveChangesAsync(ct);
+    }
+}
 
+/// <summary>SuperAdmin suspend / reactivate retailer (also clears inactivity block).</summary>
+public record SetRetailerActiveCommand(Guid Id, bool IsActive) : IRequest;
+
+public class SetRetailerActiveCommandValidator : AbstractValidator<SetRetailerActiveCommand>
+{
+    public SetRetailerActiveCommandValidator() => RuleFor(x => x.Id).NotEmpty();
+}
+
+public class SetRetailerActiveCommandHandler : IRequestHandler<SetRetailerActiveCommand>
+{
+    private readonly IApplicationDbContext _context;
+    private readonly IIdentityService _identity;
+
+    public SetRetailerActiveCommandHandler(IApplicationDbContext context, IIdentityService identity)
+    {
+        _context = context;
+        _identity = identity;
+    }
+
+    public async Task Handle(SetRetailerActiveCommand request, CancellationToken ct)
+    {
+        var retailer = await _context.Retailers.FirstOrDefaultAsync(r => r.Id == request.Id, ct)
+            ?? throw new NotFoundException(nameof(Domain.Entities.Retailer), request.Id);
+
+        retailer.IsActive = request.IsActive;
+        if (request.IsActive)
+        {
+            retailer.IsBlocked = false;
+            retailer.BlockedAtUtc = null;
+            await _identity.SetUserActiveAsync(retailer.ApplicationUserId, true, ct);
+            await _identity.TouchLastLoginAsync(retailer.ApplicationUserId, ct);
+        }
+        else
+        {
+            await _identity.SetUserActiveAsync(retailer.ApplicationUserId, false, ct);
+        }
+
+        await _context.SaveChangesAsync(ct);
+    }
+}
+
+/// <summary>Soft-delete retailer from Super Admin list (hidden + login disabled).</summary>
+public record SoftDeleteRetailerCommand(Guid Id) : IRequest;
+
+public class SoftDeleteRetailerCommandValidator : AbstractValidator<SoftDeleteRetailerCommand>
+{
+    public SoftDeleteRetailerCommandValidator() => RuleFor(x => x.Id).NotEmpty();
+}
+
+public class SoftDeleteRetailerCommandHandler : IRequestHandler<SoftDeleteRetailerCommand>
+{
+    private readonly IApplicationDbContext _context;
+    private readonly IIdentityService _identity;
+    private readonly IDateTimeService _dateTime;
+
+    public SoftDeleteRetailerCommandHandler(
+        IApplicationDbContext context, IIdentityService identity, IDateTimeService dateTime)
+    {
+        _context = context;
+        _identity = identity;
+        _dateTime = dateTime;
+    }
+
+    public async Task Handle(SoftDeleteRetailerCommand request, CancellationToken ct)
+    {
+        var retailer = await _context.Retailers.FirstOrDefaultAsync(r => r.Id == request.Id, ct)
+            ?? throw new NotFoundException(nameof(Domain.Entities.Retailer), request.Id);
+
+        retailer.IsActive = false;
+        retailer.IsDeleted = true;
+        retailer.DeletedAtUtc = _dateTime.UtcNow;
+        await _identity.SetUserActiveAsync(retailer.ApplicationUserId, false, ct);
         await _context.SaveChangesAsync(ct);
     }
 }

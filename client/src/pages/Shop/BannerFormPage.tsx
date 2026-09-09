@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Camera } from 'lucide-react'
 import { api } from '@/api/axiosClient'
-import { SHOP_CATEGORIES, uploadShopMedia, type ShopBannerRow } from './shopTypes'
+import type { CatalogLookups } from '@/pages/Products/productWizardTypes'
+import { DEFAULT_BANNER_CATEGORIES, uploadShopMedia, type ShopBannerRow } from './shopTypes'
 
 type Mode = 'header' | 'category'
 
@@ -16,11 +17,25 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
 
   const [productCode, setProductCode] = useState('')
   const [bannerName, setBannerName] = useState('')
-  const [categoryName, setCategoryName] = useState<string>(SHOP_CATEGORIES[0])
+  const [categoryName, setCategoryName] = useState<string>(DEFAULT_BANNER_CATEGORIES[0])
   const [imageUrl, setImageUrl] = useState('')
   const [preview, setPreview] = useState<string | null>(null)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const lookups = useQuery({
+    queryKey: ['master-catalog-lookups'],
+    queryFn: async () => (await api.get<CatalogLookups>('/master-catalog/lookups')).data
+  })
+
+  const categories = useMemo(() => {
+    const fromApi = (lookups.data?.categories ?? [])
+      .filter((c) => c.isReady !== false)
+      .map((c) => c.name)
+      .filter(Boolean)
+    const unique = [...new Set(fromApi)]
+    return unique.length > 0 ? unique : [...DEFAULT_BANNER_CATEGORIES]
+  }, [lookups.data])
 
   const detailQuery = useQuery({
     queryKey: ['shop-banner', id],
@@ -32,14 +47,26 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
     if (!detailQuery.data) return
     setProductCode(detailQuery.data.productCode)
     setBannerName(detailQuery.data.bannerName ?? '')
-    setCategoryName(detailQuery.data.categoryName || SHOP_CATEGORIES[0])
+    setCategoryName(detailQuery.data.categoryName || categories[0])
     setImageUrl(detailQuery.data.imageUrl)
-  }, [detailQuery.data])
+  }, [detailQuery.data, categories])
+
+  useEffect(() => {
+    if (!categories.includes(categoryName) && categories[0]) {
+      setCategoryName(categories[0])
+    }
+  }, [categories, categoryName])
 
   const save = useMutation({
     mutationFn: async () => {
       let url = imageUrl
-      if (pendingFile) url = await uploadShopMedia(pendingFile, mode === 'header' ? 'header-banners' : 'category-banners')
+      if (pendingFile) {
+        url = await uploadShopMedia(
+          pendingFile,
+          mode === 'header' ? 'header-banners' : 'category-banners',
+          mode === 'header' ? 'Header' : 'Category'
+        )
+      }
 
       const body = {
         type: mode === 'header' ? 'Header' : 'Category',
@@ -67,7 +94,8 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
     },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['shop-banners'] })
-      navigate('/shop')
+      await qc.invalidateQueries({ queryKey: ['catalog-banners'] })
+      navigate('/promotions')
     },
     onError: (e: unknown) => {
       const msg = (e as { response?: { data?: { title?: string; detail?: string } } })?.response?.data
@@ -81,15 +109,22 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
     setPreview(URL.createObjectURL(file))
   }
 
-  const title = mode === 'header' ? 'Header-Banner' : 'Category Banner'
+  const title = mode === 'header' ? 'Header Banner' : 'Category Banner'
   const displayImage = preview || imageUrl || null
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-extrabold text-suzuki-navy">{title}</h1>
+      <div>
+        <h1 className="text-2xl font-extrabold text-suzuki-navy">{title}</h1>
+        <p className="text-sm text-suzuki-mute mt-1">
+          {mode === 'header'
+            ? 'Shows at the top of Start Order and Distributor dashboard.'
+            : 'Shows as category tiles on Start Order (Engine Oil, Gear Oil, etc.).'}
+        </p>
+      </div>
 
       <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-6">
-        <h2 className="text-lg font-bold text-suzuki-navy mb-5">Product Information</h2>
+        <h2 className="text-lg font-bold text-suzuki-navy mb-5">Banner details</h2>
 
         {error && (
           <div className="mb-4 rounded-lg border border-suzuki-red/30 bg-red-50 px-3 py-2 text-sm text-suzuki-red">
@@ -114,18 +149,29 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
                   value={bannerName}
                   onChange={(e) => setBannerName(e.target.value)}
                   className="field"
-                  placeholder="Motor Car"
+                  placeholder="Engine Oil"
                 />
               </Field>
             )}
 
-            <Field label="Categories*">
+            {mode === 'header' && (
+              <Field label="Banner Name (optional)">
+                <input
+                  value={bannerName}
+                  onChange={(e) => setBannerName(e.target.value)}
+                  className="field"
+                  placeholder="Summer offer"
+                />
+              </Field>
+            )}
+
+            <Field label="Category*">
               <select
                 value={categoryName}
                 onChange={(e) => setCategoryName(e.target.value)}
                 className="field"
               >
-                {SHOP_CATEGORIES.map((c) => (
+                {categories.map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
@@ -134,7 +180,7 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
             <div className="flex gap-3 pt-4">
               <button
                 type="button"
-                onClick={() => navigate('/shop')}
+                onClick={() => navigate('/promotions')}
                 className="rounded-lg bg-suzuki-ice text-suzuki-navy px-6 py-2.5 text-sm font-bold"
               >
                 CANCEL
@@ -164,7 +210,7 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
               className="mt-3 inline-flex items-center gap-2 text-suzuki-red text-sm font-semibold underline"
             >
               <Camera size={16} />
-              Change Product Image
+              Change image
             </button>
             <input
               ref={fileRef}

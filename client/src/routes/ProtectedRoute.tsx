@@ -10,10 +10,7 @@ export default function ProtectedRoute({ allowedRoles }: Props) {
 
   if (!isAuthenticated) return <Navigate to="/login" replace />
 
-  // Retailers may use the web only to correct a sent-back registration.
-  if (role === 'Retailer' && !requiresCorrection) {
-    return <Navigate to="/use-mobile-app" replace />
-  }
+  // Retailers use the same start-order + catalog web flow as distributors.
 
   if (requiresCorrection) return <Navigate to="/correct-registration" replace />
   if (allowedRoles && role && !allowedRoles.includes(role)) return <Navigate to="/" replace />

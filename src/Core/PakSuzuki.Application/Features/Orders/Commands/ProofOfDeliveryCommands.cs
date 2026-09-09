@@ -3,6 +3,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
+using PakSuzuki.Application.Features.Orders;
 using PakSuzuki.Domain.Entities;
 
 namespace PakSuzuki.Application.Features.Orders.Commands;
@@ -48,9 +49,7 @@ public class UploadProofOfDeliveryCommandHandler : IRequestHandler<UploadProofOf
             .FirstOrDefaultAsync(o => o.Id == request.OrderId, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Order), request.OrderId);
 
-        var shipToParty = order.Source == Domain.Enums.OrderSourceType.RetailerOrder
-            && order.Retailer?.IsEligibleForDirectShipToParty == true;
-        var pakSuzukiDelivers = order.Source == Domain.Enums.OrderSourceType.DistributorDirectOrder || shipToParty;
+        var pakSuzukiDelivers = OrderFulfillmentRules.PakSuzukiDelivers(order);
         var isStaff = request.UploadedByRole is Domain.Enums.Roles.SuperAdmin or Domain.Enums.Roles.Admin;
         var isDistributor = request.UploadedByRole == Domain.Enums.Roles.Distributor;
 

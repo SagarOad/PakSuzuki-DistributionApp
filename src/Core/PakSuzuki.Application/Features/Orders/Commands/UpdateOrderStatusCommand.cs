@@ -5,6 +5,8 @@ using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Domain.Enums;
 
+using PakSuzuki.Application.Features.Orders;
+
 namespace PakSuzuki.Application.Features.Orders.Commands;
 
 // Manual status update with shipper enforcement:
@@ -25,25 +27,35 @@ public class UpdateOrderStatusCommandHandler : IRequestHandler<UpdateOrderStatus
 {
     private readonly IApplicationDbContext _context;
     private readonly ICurrentUserService _currentUser;
+    private readonly IAppNotificationService _notifications;
 
-    public UpdateOrderStatusCommandHandler(IApplicationDbContext context, ICurrentUserService currentUser)
+    public UpdateOrderStatusCommandHandler(
+        IApplicationDbContext context,
+        ICurrentUserService currentUser,
+        IAppNotificationService notifications)
     {
         _context = context;
         _currentUser = currentUser;
+        _notifications = notifications;
     }
 
     public async Task Handle(UpdateOrderStatusCommand request, CancellationToken ct)
     {
         var order = await _context.Orders
             .Include(o => o.Retailer)
+            .Include(o => o.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(o => o.Id == request.OrderId, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Order), request.OrderId);
 
         var role = _currentUser.Role;
         var isDeliveryAdvance = request.Status is OrderStatus.PartiallyDelivered or OrderStatus.Delivered;
-        var shipToParty = order.Source == OrderSourceType.RetailerOrder
-            && order.Retailer?.IsEligibleForDirectShipToParty == true;
-        var pakSuzukiDelivers = order.Source == OrderSourceType.DistributorDirectOrder || shipToParty;
+        var pakSuzukiDelivers = OrderFulfillmentRules.PakSuzukiDelivers(order);
+
+        if (request.Status == OrderStatus.PartiallyDelivered && !OrderFulfillmentRules.AllowsPartialDelivery(order))
+            throw new ConflictException(
+                pakSuzukiDelivers
+                    ? "Partial delivery applies to Parts orders to Pak Suzuki only — lubricant orders must be delivered in full."
+                    : "Partial delivery is not allowed between retailer and distributor — deliver the full order.");
 
         if (role == Roles.Distributor)
         {
@@ -71,7 +83,7 @@ public class UpdateOrderStatusCommandHandler : IRequestHandler<UpdateOrderStatus
                     "This retailer order is fulfilled by the distributor — only they can update delivery status.");
 
             // Staff should not workflow-action normal (non Ship-to-Party) retailer pending orders via patch.
-            if (order.Source == OrderSourceType.RetailerOrder && !shipToParty
+            if (order.Source == OrderSourceType.RetailerOrder && !pakSuzukiDelivers
                 && request.Status is OrderStatus.ApprovedByPakSuzuki or OrderStatus.PendingPakSuzukiApproval)
                 throw new ForbiddenAccessException(
                     "Normal retailer orders are handled by the distributor, not Pak Suzuki.");
@@ -82,8 +94,42 @@ public class UpdateOrderStatusCommandHandler : IRequestHandler<UpdateOrderStatus
         }
 
         order.Status = request.Status;
-        if (request.Remarks != null) order.PakSuzukiRemarks = request.Remarks;
+        if (request.Remarks != null)
+        {
+            if (role == Roles.Distributor)
+                order.DistributorRemarks = request.Remarks;
+            else if (role is Roles.SuperAdmin or Roles.Admin)
+                order.PakSuzukiRemarks = request.Remarks;
+        }
 
         await _context.SaveChangesAsync(ct);
+
+        if (request.Status is OrderStatus.PartiallyDelivered or OrderStatus.Delivered or OrderStatus.InvoiceConfirmed)
+        {
+            var link = $"/orders/{order.Id}";
+            if (order.RetailerId is Guid retailerId)
+            {
+                await _notifications.NotifyRetailerAsync(
+                    retailerId,
+                    "Order status updated",
+                    $"Order {order.OrderNumber}: {OrderStatusDisplay.CustomerLabel(order.Status)}.",
+                    NotificationCategories.Order,
+                    link,
+                    order.Id,
+                    ct);
+            }
+
+            if (role is Roles.SuperAdmin or Roles.Admin)
+            {
+                await _notifications.NotifyDistributorAsync(
+                    order.DistributorId,
+                    "Order status updated",
+                    $"Order {order.OrderNumber}: {OrderStatusDisplay.StaffLabel(order.Status)}.",
+                    NotificationCategories.Order,
+                    link,
+                    order.Id,
+                    ct);
+            }
+        }
     }
 }

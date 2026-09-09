@@ -13,6 +13,9 @@ public class DistributorConfiguration : IEntityTypeConfiguration<Distributor>
         builder.HasIndex(d => d.Email).IsUnique();
         builder.Property(d => d.Name).HasMaxLength(200);
         builder.Property(d => d.Iban).HasMaxLength(34);
+        builder.Property(d => d.ProfileImageUrl).HasMaxLength(500);
+        builder.Property(d => d.SapDealerCode).HasMaxLength(50);
+        builder.Property(d => d.SapShipToCode).HasMaxLength(50);
 
         builder.HasOne(d => d.Region).WithMany(r => r.Distributors)
             .HasForeignKey(d => d.RegionId).OnDelete(DeleteBehavior.Restrict);

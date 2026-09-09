@@ -12,7 +12,9 @@ import RetailerDetailPage from './pages/Retailers/RetailerDetailPage'
 import OrdersPage from './pages/Orders/OrdersPage'
 import OrderDetailsPage from './pages/Orders/OrderDetailsPage'
 import AmendOrderPage from './pages/Orders/AmendOrderPage'
+import MiddlewarePickupPage from './pages/Orders/MiddlewarePickupPage'
 import ProductList from './pages/Products/ProductList'
+import ProductWizardPage from './pages/Products/ProductWizardPage'
 import MorePage from './pages/MorePage'
 import MapViewPage from './pages/Map/MapViewPage'
 import MyShopPage from './pages/Shop/MyShopPage'
@@ -23,6 +25,11 @@ import RetailerRegisterPage from './pages/Retailers/RetailerRegisterPage'
 import IncentivesPage from './pages/Incentives/IncentivesPage'
 import IncentiveFormPage from './pages/Incentives/IncentiveFormPage'
 import IncentiveDetailPage from './pages/Incentives/IncentiveDetailPage'
+import ProductGroupsPage from './pages/Incentives/ProductGroupsPage'
+import IncentiveSchemesPage, {
+  IncentiveSchemeDetailPage,
+  IncentiveSchemeFormPage
+} from './pages/Incentives/IncentiveSchemesPages'
 import ClaimsPage from './pages/Claims/ClaimsPage'
 import ClaimDetailsPage from './pages/Claims/ClaimDetailsPage'
 import PromotionsPage from './pages/Promotions/PromotionsPage'
@@ -34,6 +41,7 @@ import CatalogProductPage from './pages/Catalog/CatalogProductPage'
 import CartPage from './pages/Catalog/CartPage'
 import OrderSummaryPage from './pages/Catalog/OrderSummaryPage'
 import PaymentPage from './pages/Catalog/PaymentPage'
+import StartOrderPage from './pages/Catalog/StartOrderPage'
 
 export default function App() {
   return (
@@ -53,12 +61,14 @@ export default function App() {
           <Route path="/shop/header-banners/:id" element={<BannerFormPage mode="header" />} />
           <Route path="/shop/category-banners/:id" element={<BannerFormPage mode="category" />} />
           <Route path="/shop/products/:id" element={<ProductDetailsPage />} />
+          <Route path="/order/start" element={<StartOrderPage />} />
           <Route path="/catalog/products/:id" element={<CatalogProductPage />} />
           <Route path="/catalog/:categoryKey" element={<LubricantCategoryPage />} />
           <Route path="/cart" element={<CartPage />} />
           <Route path="/checkout/summary" element={<OrderSummaryPage />} />
           <Route path="/checkout/payment" element={<PaymentPage />} />
           <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/orders/middleware" element={<MiddlewarePickupPage />} />
           <Route path="/orders/:id/amend" element={<AmendOrderPage />} />
           <Route path="/orders/:id" element={<OrderDetailsPage />} />
           <Route path="/claims" element={<ClaimsPage />} />
@@ -67,20 +77,27 @@ export default function App() {
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/products" element={<ProductList />} />
+          <Route path="/products/new" element={<ProductWizardPage />} />
+          <Route path="/products/:id" element={<ProductWizardPage />} />
 
           <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin', 'Distributor']} />}>
             <Route path="/distributors/:id" element={<DistributorProfilePage />} />
             <Route path="/retailers" element={<RetailersPage />} />
             <Route path="/retailers/:id" element={<RetailerDetailPage />} />
+            <Route path="/incentives" element={<IncentivesPage />} />
+            <Route path="/incentives/:id" element={<IncentiveDetailPage />} />
           </Route>
 
           <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin']} />}>
             <Route path="/distributors" element={<DistributorsPage />} />
             <Route path="/promotions" element={<PromotionsPage />} />
-            <Route path="/incentives" element={<IncentivesPage />} />
             <Route path="/incentives/new" element={<IncentiveFormPage />} />
-            <Route path="/incentives/:id" element={<IncentiveDetailPage />} />
             <Route path="/incentives/:id/edit" element={<IncentiveFormPage />} />
+            <Route path="/product-groups" element={<ProductGroupsPage />} />
+            <Route path="/incentive-schemes" element={<IncentiveSchemesPage />} />
+            <Route path="/incentive-schemes/new" element={<IncentiveSchemeFormPage />} />
+            <Route path="/incentive-schemes/:id" element={<IncentiveSchemeDetailPage />} />
+            <Route path="/incentive-schemes/:id/edit" element={<IncentiveSchemeFormPage />} />
           </Route>
         </Route>
       </Route>

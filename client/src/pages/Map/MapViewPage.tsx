@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
-import L from 'leaflet'
 import { Crosshair, Package, Search, Truck } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
+import { distributorPinIcon, retailerPinIcon } from '@/components/maps/mapPins'
 import clsx from 'clsx'
 import 'leaflet/dist/leaflet.css'
 
@@ -33,24 +33,10 @@ interface RegionRow {
   centerLongitude: number
 }
 
-const redIcon = L.divIcon({
-  className: '',
-  html: `<div style="width:28px;height:28px;margin-left:-14px;margin-top:-28px;">
-    <svg viewBox="0 0 24 36" width="28" height="36" xmlns="http://www.w3.org/2000/svg">
-      <path fill="#E30613" stroke="#fff" stroke-width="1.2"
-        d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z"/>
-      <circle cx="12" cy="12" r="4.5" fill="#fff"/>
-    </svg>
-  </div>`,
-  iconSize: [28, 36],
-  iconAnchor: [14, 36],
-  popupAnchor: [0, -34]
-})
-
 export default function MapViewPage() {
   const navigate = useNavigate()
   const { role } = useAuth()
-  const [filter, setFilter] = useState<FilterKind>('distributor')
+  const [filter, setFilter] = useState<FilterKind>('all')
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [regionId, setRegionId] = useState<string>('')
@@ -106,13 +92,13 @@ export default function MapViewPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-5 min-h-[calc(100vh-180px)]">
-        {/* Sidebar list */}
-        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card flex flex-col overflow-hidden min-h-[360px] xl:min-h-[520px]">
-          <div className="p-5 border-b border-suzuki-line">
+    <div className="h-[calc(100dvh-7.25rem)] sm:h-[calc(100dvh-7.75rem)] min-h-0 flex flex-col">
+      <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-4 sm:gap-5 flex-1 min-h-0">
+        {/* Sidebar list — scrolls inside the card, not the page */}
+        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card flex flex-col overflow-hidden min-h-0 max-h-[42vh] xl:max-h-none">
+          <div className="p-4 sm:p-5 border-b border-suzuki-line shrink-0">
             <h1 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">Map View</h1>
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-3 sm:mt-4 flex flex-wrap gap-2">
               {([
                 ['all', 'All'],
                 ['distributor', 'Distributor'],
@@ -159,7 +145,7 @@ export default function MapViewPage() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4 space-y-3">
             {markersQuery.isLoading && (
               <p className="text-sm text-suzuki-mute text-center py-8">Loading locations…</p>
             )}
@@ -218,20 +204,20 @@ export default function MapViewPage() {
           </div>
         </section>
 
-        {/* Bird eye map */}
-        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden flex flex-col min-h-[360px] xl:min-h-[520px]">
-          <div className="px-5 py-4 border-b border-suzuki-line flex items-center justify-between gap-3">
-            <h2 className="text-xl font-extrabold text-suzuki-navy">Bird Eye View</h2>
+        {/* Bird eye map — fills remaining viewport height */}
+        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden flex flex-col min-h-0 flex-1">
+          <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-suzuki-line flex items-center justify-between gap-3 shrink-0">
+            <h2 className="text-lg sm:text-xl font-extrabold text-suzuki-navy">Bird Eye View</h2>
             {role === 'Distributor' && (
               <span className="text-xs font-semibold text-suzuki-mute">Showing your network only</span>
             )}
           </div>
 
-          <div className="relative flex-1 min-h-[280px] sm:min-h-[360px] xl:min-h-[460px]">
+          <div className="relative flex-1 min-h-0">
             <MapContainer
               center={mapCenter}
               zoom={selected ? 12 : 6}
-              className="h-full w-full z-0"
+              className="absolute inset-0 h-full w-full z-0"
               scrollWheelZoom
             >
               <TileLayer
@@ -243,7 +229,7 @@ export default function MapViewPage() {
                 <Marker
                   key={m.id}
                   position={[m.latitude, m.longitude]}
-                  icon={redIcon}
+                  icon={m.kind === 'Retailer' ? retailerPinIcon : distributorPinIcon}
                   eventHandlers={{ click: () => setSelectedId(m.id) }}
                 >
                   <Popup>
@@ -255,7 +241,7 @@ export default function MapViewPage() {
             </MapContainer>
 
             {/* City badge */}
-            <div className="pointer-events-none absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2 z-[400] hidden md:block">
+            <div className="pointer-events-none absolute left-1/2 top-[38%] -translate-x-1/2 -translate-y-1/2 z-[400] hidden md:block">
               <div className="rounded-full bg-suzuki-red text-white text-sm font-extrabold px-5 py-2 shadow-lg">
                 {cityLabel}
               </div>
@@ -263,12 +249,15 @@ export default function MapViewPage() {
 
             {/* Floating profile card */}
             {selected && (
-              <div className="absolute left-3 right-3 bottom-3 sm:left-auto sm:right-4 sm:bottom-4 z-[500] sm:w-[min(100%-2rem,340px)] bg-white rounded-2xl border border-suzuki-line shadow-card p-4">
+              <div className="absolute left-3 right-3 bottom-3 sm:left-auto sm:right-4 sm:bottom-4 z-[500] sm:w-[min(100%-2rem,320px)] bg-white rounded-2xl border border-suzuki-line shadow-card p-3.5 sm:p-4 max-h-[45%] overflow-y-auto">
                 <div className="flex gap-3">
-                  <div className="h-12 w-12 rounded-xl bg-suzuki-red flex items-center justify-center shrink-0">
+                  <div className={clsx(
+                    'h-11 w-11 rounded-xl flex items-center justify-center shrink-0',
+                    selected.kind === 'Distributor' ? 'bg-suzuki-red' : 'bg-blue-600'
+                  )}>
                     {selected.kind === 'Distributor'
-                      ? <Truck size={22} className="text-white" />
-                      : <Package size={22} className="text-white" />}
+                      ? <Truck size={20} className="text-white" />
+                      : <Package size={20} className="text-white" />}
                   </div>
                   <div className="min-w-0">
                     <div className="font-extrabold text-suzuki-navy truncate">{selected.name}</div>

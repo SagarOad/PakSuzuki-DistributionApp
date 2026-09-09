@@ -2,6 +2,7 @@ using FluentValidation;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
+using PakSuzuki.Application.Common.Images;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Common.Models;
 using PakSuzuki.Domain.Entities;
@@ -110,8 +111,13 @@ public class UpsertPromotionCommandHandler : IRequestHandler<UpsertPromotionComm
 
         if (request.ImageContent != null && !string.IsNullOrWhiteSpace(request.ImageFileName))
         {
+            await using var buffer = new MemoryStream();
+            await request.ImageContent.CopyToAsync(buffer, ct);
+            buffer.Position = 0;
+            BannerImageAspect.EnsureValid(buffer, request.Type);
+            buffer.Position = 0;
             promotion.ImageUrl = await _files.UploadAsync(
-                request.ImageContent, request.ImageFileName, Container, ct);
+                buffer, request.ImageFileName, Container, ct);
         }
         else if (string.IsNullOrWhiteSpace(promotion.ImageUrl))
         {

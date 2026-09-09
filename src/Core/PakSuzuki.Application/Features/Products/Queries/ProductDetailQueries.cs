@@ -2,7 +2,6 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
-using PakSuzuki.Domain.Enums;
 
 namespace PakSuzuki.Application.Features.Products.Queries;
 
@@ -11,7 +10,7 @@ namespace PakSuzuki.Application.Features.Products.Queries;
 //   Distributor -> selling + retail + margin
 //   Retailer -> retail price only
 public record ProductPriceDto(
-    Guid Id, decimal? CostPrice, decimal SellingPrice, decimal RetailPrice,
+    Guid Id, decimal? CostPrice, decimal? SellingPrice, decimal? RetailPrice,
     decimal GstPercent, decimal FedPercent, decimal WhtPercent,
     decimal? MarginFixed, decimal? MarginPercent,
     DateTime EffectiveFromUtc, DateTime? EffectiveToUtc, bool IsCurrent);
@@ -26,7 +25,13 @@ public record GetProductByIdQuery(Guid Id, string ViewerRole) : IRequest<Product
 public class GetProductByIdQueryHandler : IRequestHandler<GetProductByIdQuery, ProductDetailDto>
 {
     private readonly IApplicationDbContext _context;
-    public GetProductByIdQueryHandler(IApplicationDbContext context) => _context = context;
+    private readonly IPriceVisibilityService _visibility;
+
+    public GetProductByIdQueryHandler(IApplicationDbContext context, IPriceVisibilityService visibility)
+    {
+        _context = context;
+        _visibility = visibility;
+    }
 
     public async Task<ProductDetailDto> Handle(GetProductByIdQuery request, CancellationToken ct)
     {
@@ -34,12 +39,11 @@ public class GetProductByIdQueryHandler : IRequestHandler<GetProductByIdQuery, P
             .FirstOrDefaultAsync(p => p.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Product), request.Id);
 
-        var isSuperAdmin = request.ViewerRole == Roles.SuperAdmin;
-        var canSeeDistributorPricing = isSuperAdmin || request.ViewerRole == Roles.Distributor;
+        var visibility = await _visibility.GetAsync(request.ViewerRole, ct);
 
         var priceHistory = product.PriceHistory
             .OrderByDescending(pp => pp.EffectiveFromUtc)
-            .Select(pp => MapPrice(pp, isSuperAdmin, canSeeDistributorPricing))
+            .Select(pp => MapPrice(pp, visibility))
             .ToList();
 
         var currentPrice = priceHistory.FirstOrDefault(pp => pp.IsCurrent);
@@ -50,15 +54,15 @@ public class GetProductByIdQueryHandler : IRequestHandler<GetProductByIdQuery, P
             product.CreatedAtUtc, currentPrice, priceHistory);
     }
 
-    private static ProductPriceDto MapPrice(Domain.Entities.ProductPrice pp, bool isSuperAdmin, bool canSeeDistributorPricing) =>
+    private static ProductPriceDto MapPrice(Domain.Entities.ProductPrice pp, PriceVisibility visibility) =>
         new(
             pp.Id,
-            isSuperAdmin ? pp.CostPrice : null,
-            pp.SellingPrice,
-            pp.RetailPrice,
+            visibility.CanSeeCost ? pp.CostPrice : null,
+            visibility.CanSeePurchase ? pp.SellingPrice : null,
+            visibility.CanSeeSale ? pp.RetailPrice : null,
             pp.GstPercent, pp.FedPercent, pp.WhtPercent,
-            canSeeDistributorPricing ? pp.MarginFixed : null,
-            canSeeDistributorPricing ? pp.MarginPercent : null,
+            visibility.CanSeeCost && visibility.CanSeePurchase ? pp.MarginFixed : null,
+            visibility.CanSeeCost && visibility.CanSeePurchase ? pp.MarginPercent : null,
             pp.EffectiveFromUtc, pp.EffectiveToUtc, pp.IsCurrent);
 }
 
@@ -76,13 +80,28 @@ public class GetProductPriceHistoryQueryHandler : IRequestHandler<GetProductPric
         var exists = await _context.Products.AnyAsync(p => p.Id == request.ProductId, ct);
         if (!exists) throw new NotFoundException(nameof(Domain.Entities.Product), request.ProductId);
 
-        return await _context.ProductPrices
+        var rows = await _context.ProductPrices
             .Where(pp => pp.ProductId == request.ProductId)
             .OrderByDescending(pp => pp.EffectiveFromUtc)
-            .Select(pp => new ProductPriceDto(
+            .Select(pp => new
+            {
                 pp.Id, pp.CostPrice, pp.SellingPrice, pp.RetailPrice,
-                pp.GstPercent, pp.FedPercent, pp.WhtPercent, pp.MarginFixed, pp.MarginPercent,
-                pp.EffectiveFromUtc, pp.EffectiveToUtc, pp.IsCurrent))
+                pp.GstPercent, pp.FedPercent, pp.WhtPercent,
+                pp.EffectiveFromUtc, pp.EffectiveToUtc, pp.IsCurrent
+            })
             .ToListAsync(ct);
+
+        return rows.Select(pp =>
+        {
+            var marginFixed = pp.SellingPrice - pp.CostPrice;
+            var marginPercent = pp.CostPrice == 0
+                ? 0
+                : Math.Round((pp.SellingPrice - pp.CostPrice) / pp.CostPrice * 100, 2);
+            return new ProductPriceDto(
+                pp.Id, pp.CostPrice, pp.SellingPrice, pp.RetailPrice,
+                pp.GstPercent, pp.FedPercent, pp.WhtPercent,
+                marginFixed, marginPercent,
+                pp.EffectiveFromUtc, pp.EffectiveToUtc, pp.IsCurrent);
+        }).ToList();
     }
 }

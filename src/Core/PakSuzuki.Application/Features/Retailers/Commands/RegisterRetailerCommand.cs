@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
+using PakSuzuki.Application.Common.Models;
 using PakSuzuki.Application.Features.Auth.Commands;
 using PakSuzuki.Application.Features.Maps.Queries;
 using PakSuzuki.Domain.Entities;
@@ -14,11 +15,13 @@ namespace PakSuzuki.Application.Features.Retailers.Commands;
 /// <summary>
 /// Register retailer. Pass <paramref name="DistributorId"/> from Find nearest / nearest API,
 /// or omit / empty Guid to auto-assign the nearest approved distributor from lat/long.
+/// The profile photo and shop photos are stored with the registration itself.
 /// </summary>
 public record RegisterRetailerCommand(
     string Name, string Cnic, string MobileNumber, string Email, string Password,
     string BusinessName, string Ntn, string Iban, string BusinessAddress,
-    double Latitude, double Longitude, Guid? DistributorId = null, List<string>? BusinessImageUrls = null
+    double Latitude, double Longitude, Guid? DistributorId = null,
+    UploadedImage? ProfileImage = null, List<UploadedImage>? BusinessImages = null
 ) : IRequest<RegisterRetailerResult>;
 
 public record RegisterRetailerResult(Guid Id, Guid DistributorId, string DistributorName, double? DistanceKm);
@@ -61,21 +64,33 @@ public class RegisterRetailerCommandValidator : AbstractValidator<RegisterRetail
         RuleFor(x => x)
             .Must(x => Math.Abs(x.Latitude) > 0.0001 || Math.Abs(x.Longitude) > 0.0001)
             .WithMessage("Set your shop location (latitude/longitude) so we can assign the nearest distributor.");
+
+        RuleFor(x => x.BusinessImages)
+            .Must(images => images is { Count: > 0 })
+            .WithMessage("At least one shop / business photo is required (form field: businessImages).");
     }
 }
 
 public class RegisterRetailerCommandHandler : IRequestHandler<RegisterRetailerCommand, RegisterRetailerResult>
 {
+    private const string ProfileContainer = "retailer-profiles";
+    private const string BusinessContainer = "retailer-images";
+
     private readonly IApplicationDbContext _context;
     private readonly IIdentityService _identityService;
+    private readonly IFileStorageService _fileStorage;
     private readonly ISender _mediator;
+    private readonly IAppNotificationService _notifications;
 
     public RegisterRetailerCommandHandler(
-        IApplicationDbContext context, IIdentityService identityService, ISender mediator)
+        IApplicationDbContext context, IIdentityService identityService,
+        IFileStorageService fileStorage, ISender mediator, IAppNotificationService notifications)
     {
         _context = context;
         _identityService = identityService;
+        _fileStorage = fileStorage;
         _mediator = mediator;
+        _notifications = notifications;
     }
 
     public async Task<RegisterRetailerResult> Handle(RegisterRetailerCommand request, CancellationToken ct)
@@ -116,41 +131,67 @@ public class RegisterRetailerCommandHandler : IRequestHandler<RegisterRetailerCo
         if (await _context.Retailers.AnyAsync(r => r.Cnic == cnic, ct))
             throw new ConflictException("A retailer with this CNIC is already registered.");
 
-        if (await _context.Retailers.AnyAsync(r => r.Email == request.Email, ct))
+        var email = request.Email.Trim();
+
+        if (await _context.Retailers.AnyAsync(r => r.Email == email, ct))
             throw new ConflictException("A retailer with this email is already registered.");
 
-        var userId = await _identityService.CreateUserAsync(
-            request.Email, request.Email, request.Password, Roles.Retailer, ct);
+        if (await _context.Distributors.AnyAsync(d => d.Email == email, ct))
+            throw new ConflictException("This email is already registered as a distributor. Use a different email.");
 
-        var retailer = new Retailer
-        {
-            ApplicationUserId = userId,
-            RetailerCode = $"R{DateTime.UtcNow:yy}{Random.Shared.Next(1000, 9999)}",
-            Name = request.Name.Trim(),
-            Cnic = cnic,
-            MobileNumber = mobile,
-            Email = request.Email.Trim(),
-            BusinessName = request.BusinessName.Trim(),
-            Ntn = request.Ntn.Trim(),
-            Iban = request.Iban.Trim(),
-            BusinessAddress = request.BusinessAddress.Trim(),
-            Latitude = request.Latitude,
-            Longitude = request.Longitude,
-            DistributorId = distributorId,
-            DistributorApprovalStatus = ApprovalStatus.PendingReview,
-            SuperAdminApprovalStatus = ApprovalStatus.PendingReview,
-            IsActive = false
-        };
+        if (await _context.Distributors.AnyAsync(d => d.Cnic == cnic, ct))
+            throw new ConflictException("This CNIC is already registered as a distributor. Use a different CNIC.");
 
-        foreach (var url in request.BusinessImageUrls ?? Enumerable.Empty<string>())
+        var userId = await _identityService.CreateRegistrationUserAsync(
+            email, request.Password, Roles.Retailer, ct);
+
+        var images = new RegistrationImageStore(_fileStorage);
+
+        try
         {
-            if (string.IsNullOrWhiteSpace(url) || url.Equals("string", StringComparison.OrdinalIgnoreCase))
-                continue;
-            retailer.BusinessImages.Add(new BusinessImage { StorageUrl = url, FileName = Path.GetFileName(url) });
+            var retailer = new Retailer
+            {
+                ApplicationUserId = userId,
+                RetailerCode = $"R{DateTime.UtcNow:yy}{Random.Shared.Next(1000, 9999)}",
+                Name = request.Name.Trim(),
+                Cnic = cnic,
+                MobileNumber = mobile,
+                Email = email,
+                BusinessName = request.BusinessName.Trim(),
+                Ntn = request.Ntn.Trim(),
+                Iban = request.Iban.Trim(),
+                BusinessAddress = request.BusinessAddress.Trim(),
+                Latitude = request.Latitude,
+                Longitude = request.Longitude,
+                DistributorId = distributorId,
+                DistributorApprovalStatus = ApprovalStatus.PendingReview,
+                SuperAdminApprovalStatus = ApprovalStatus.PendingReview,
+                IsActive = false,
+                ProfileImageUrl = await images.SaveProfileImageAsync(request.ProfileImage, ProfileContainer, ct)
+            };
+
+            foreach (var image in await images.SaveBusinessImagesAsync(request.BusinessImages, BusinessContainer, ct))
+                retailer.BusinessImages.Add(image);
+
+            _context.Retailers.Add(retailer);
+            await _context.SaveChangesAsync(ct);
+
+            await _notifications.NotifyDistributorAsync(
+                distributorId,
+                "New retailer registration",
+                $"{retailer.Name} registered and awaits your approval.",
+                NotificationCategories.Registration,
+                $"/retailers/{retailer.Id}",
+                retailer.Id,
+                ct);
+
+            return new RegisterRetailerResult(retailer.Id, distributorId, distributorName, distanceKm);
         }
-
-        _context.Retailers.Add(retailer);
-        await _context.SaveChangesAsync(ct);
-        return new RegisterRetailerResult(retailer.Id, distributorId, distributorName, distanceKm);
+        catch
+        {
+            await _identityService.DeleteUserAsync(userId, ct);
+            await images.DiscardAsync(ct);
+            throw;
+        }
     }
 }

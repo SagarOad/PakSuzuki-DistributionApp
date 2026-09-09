@@ -11,6 +11,16 @@
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
     },
+    "PakSuzuki.WebApi.Http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "applicationUrl": "http://localhost:5080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
     "PakSuzuki.WebApi.Https": {
       "commandName": "Project",
       "dotnetRunMessages": true,

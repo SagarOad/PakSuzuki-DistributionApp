@@ -1,12 +1,12 @@
 import { useAuth } from '@/context/AuthContext'
 import SuperAdminDashboard from './SuperAdminDashboard'
+import DistributorDashboard from './Distributor/DistributorDashboard'
 import DistributorHomePage from './Catalog/DistributorHomePage'
-import { Navigate } from 'react-router-dom'
 
-/** Role-aware home: staff dashboard; Distributor sees oil storefront. */
+/** Role-aware home: staff / distributor dashboards; retailers shop from Start Order catalog. */
 export default function Dashboard() {
   const { role } = useAuth()
-  if (role === 'Retailer') return <Navigate to="/use-mobile-app" replace />
-  if (role === 'Distributor') return <DistributorHomePage />
+  if (role === 'Distributor') return <DistributorDashboard />
+  if (role === 'Retailer') return <DistributorHomePage />
   return <SuperAdminDashboard />
 }

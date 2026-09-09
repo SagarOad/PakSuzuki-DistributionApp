@@ -12,6 +12,7 @@ public class RetailerConfiguration : IEntityTypeConfiguration<Retailer>
         builder.HasIndex(r => r.Cnic).IsUnique();
         builder.HasIndex(r => r.Email).IsUnique();
         builder.Property(r => r.Name).HasMaxLength(200);
+        builder.Property(r => r.ProfileImageUrl).HasMaxLength(500);
 
         builder.HasMany(r => r.BusinessImages).WithOne()
             .HasForeignKey(bi => bi.RetailerId).OnDelete(DeleteBehavior.Cascade);

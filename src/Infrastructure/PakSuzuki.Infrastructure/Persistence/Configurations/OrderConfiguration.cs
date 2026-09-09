@@ -14,6 +14,18 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(o => o.TotalFed).HasColumnType("decimal(18,2)");
         builder.Property(o => o.WhtAmount).HasColumnType("decimal(18,2)");
         builder.Property(o => o.GrandTotal).HasColumnType("decimal(18,2)");
+        builder.Property(o => o.VendorCode).HasMaxLength(20);
+        builder.Property(o => o.MaterialSourceCode).HasMaxLength(20);
+        builder.Property(o => o.DeliveryTypeCode).HasMaxLength(8);
+        builder.Property(o => o.DeliveryTypeName).HasMaxLength(80);
+        builder.Property(o => o.SupplierCode).HasMaxLength(20);
+        builder.Property(o => o.DistributorRemarks).HasMaxLength(2000);
+        builder.Property(o => o.PakSuzukiRemarks).HasMaxLength(2000);
+        builder.Property(o => o.RetailerRemarks).HasMaxLength(2000);
+        builder.Property(o => o.DistributorCode).HasMaxLength(50);
+        builder.Property(o => o.RetailerCode).HasMaxLength(50);
+        builder.Property(o => o.ShipToCode).HasMaxLength(50);
+        builder.Property(o => o.BillToCode).HasMaxLength(50);
 
         builder.HasOne(o => o.Distributor).WithMany(d => d.Orders)
             .HasForeignKey(o => o.DistributorId).OnDelete(DeleteBehavior.Restrict);

@@ -9,6 +9,8 @@ public static class SettingKeys
 {
     public const string ShipToPartyAmountThreshold = "ShipToParty:AmountThreshold";
     public const string ShipToPartyQuantityThreshold = "ShipToParty:QuantityThreshold";
+    /// <summary>System-wide WHT (Advance Income Tax) % applied once on each order's subtotal.</summary>
+    public const string TaxWhtPercent = "Tax:WhtPercent";
 }
 
 public record SystemSettingDto(string Key, string Value);
@@ -46,6 +48,7 @@ public class GetSettingQueryHandler : IRequestHandler<GetSettingQuery, SystemSet
         {
             SettingKeys.ShipToPartyQuantityThreshold => "1000",
             SettingKeys.ShipToPartyAmountThreshold => "10000000",
+            SettingKeys.TaxWhtPercent => "0",
             _ => ""
         };
         return new SystemSettingDto(request.Key, fallback);

@@ -30,6 +30,9 @@ export interface OrderDetail {
   orderNumber: string
   source: string
   status: string
+  statusLabel?: string | null
+  /** Raw workflow status (always enum name). Prefer this for logic. */
+  statusCode?: string | null
   retailerId?: string | null
   retailerName?: string | null
   retailerMobile?: string | null
@@ -41,18 +44,21 @@ export interface OrderDetail {
   regionName?: string | null
   distributorRemarks?: string | null
   pakSuzukiRemarks?: string | null
+  retailerRemarks?: string | null
   subTotal: number
   totalGst: number
   totalFed: number
   whtAmount: number
   grandTotal: number
   gstPercent: number
+  whtPercent: number
   sapDocumentNumber?: string | null
   sapDeliveryNumber?: string | null
   sapGrnNumber?: string | null
   sapInvoiceNumber?: string | null
   isPartialDelivery: boolean
   thresholdReached: boolean
+  allowsPartialDelivery: boolean
   originatingRetailerOrderId?: string | null
   distributorActionedAtUtc?: string | null
   pakSuzukiActionedAtUtc?: string | null
@@ -60,6 +66,25 @@ export interface OrderDetail {
   createdAtUtc: string
   items: OrderLineItem[]
   proofsOfDelivery: OrderProof[]
+  statusColor?: 'Red' | 'Yellow' | 'Green' | 'Grey' | string | null
+  middlewareStatus?: string | null
+  sapTransferStatus?: number | null
+  sapMessage?: string | null
+  poRef?: string | null
+  dealerCode?: string | null
+  retryCount?: number
+  vendorCode?: string | null
+  materialSourceCode?: string | null
+  deliveryTypeCode?: string | null
+  deliveryTypeName?: string | null
+  supplierCode?: string | null
+  thresholdMet?: boolean
+  fulfillmentChoice?: string | null
+  pakSuzukiShipTo?: string | null
+  snapshotDistributorCode?: string | null
+  snapshotRetailerCode?: string | null
+  shipToCode?: string | null
+  billToCode?: string | null
 }
 
 /** UI-facing status groups that match the design pills. */
@@ -71,31 +96,26 @@ export type UiOrderStatus =
   | 'Cancelled'
 
 export const PENDING_STATUSES = ['PendingDistributorApproval', 'PendingPakSuzukiApproval', 'SentBackForModification']
-export const DELIVERY_STATUSES = ['PartiallyDelivered', 'SubmittedToSap']
+export const DELIVERY_STATUSES = ['PartiallyDelivered', 'Delivered']
 export const COMPLETED_STATUSES = ['Delivered', 'InvoiceConfirmed']
 export const CANCELED_STATUSES = ['Cancelled', 'RejectedByDistributor']
 export const IN_PROCESS_STATUSES = [
   'ApprovedByDistributor',
   'PartiallyApprovedByDistributor',
   'ForwardedToPakSuzuki',
-  'ApprovedByPakSuzuki'
+  'ApprovedByPakSuzuki',
+  'SubmittedToSap'
 ]
 
-export function toUiStatus(status: string): UiOrderStatus {
-  if (COMPLETED_STATUSES.includes(status)) return 'Completed'
-  if (CANCELED_STATUSES.includes(status)) return 'Cancelled'
-  if (DELIVERY_STATUSES.includes(status)) return 'Delivery In Process'
-  if (PENDING_STATUSES.includes(status)) return 'Pending'
+export function toUiStatus(status: string, statusCode?: string | null): UiOrderStatus {
+  const code = statusCode || status
+  if (COMPLETED_STATUSES.includes(code)) return 'Completed'
+  if (CANCELED_STATUSES.includes(code)) return 'Cancelled'
+  if (DELIVERY_STATUSES.includes(code)) return 'Delivery In Process'
+  if (PENDING_STATUSES.includes(code)) return 'Pending'
   return 'In Process'
 }
 
-export function paymentLabel(status: string): 'In Approval' | 'Received' | '—' {
-  if (CANCELED_STATUSES.includes(status)) return '—'
-  if (PENDING_STATUSES.includes(status)) return 'In Approval'
-  return 'Received'
-}
-
-/** Maps design status buttons → backend OrderStatus enum names. */
 export function uiStatusToApi(ui: UiOrderStatus): string {
   switch (ui) {
     case 'Delivery In Process':
@@ -150,15 +170,17 @@ export function displayLineAmount(item: {
 /** Design tracking steps under Order Summary for in-progress distributor / manufacture views. */
 export type TrackingStep = 'processed' | 'readyToShip' | 'delivered'
 
-export function getOrderTracking(status: string): {
+export function getOrderTracking(status: string, statusCode?: string | null): {
   processed: boolean
   readyToShip: boolean
   delivered: boolean
   current: TrackingStep
 } {
-  const delivered = COMPLETED_STATUSES.includes(status)
+  const code = statusCode || status
+  const delivered =
+    code === 'Delivered' || code === 'InvoiceConfirmed' || code === 'PartiallyDelivered'
   const readyToShip =
-    delivered || status === 'SubmittedToSap' || status === 'PartiallyDelivered'
+    delivered || code === 'SubmittedToSap' || code === 'PartiallyDelivered' || code === 'Delivered'
   const processed =
     delivered ||
     readyToShip ||
@@ -166,7 +188,7 @@ export function getOrderTracking(status: string): {
       ...CANCELED_STATUSES,
       'PendingDistributorApproval',
       'SentBackForModification'
-    ].includes(status)
+    ].includes(code)
 
   const current: TrackingStep = delivered
     ? 'delivered'

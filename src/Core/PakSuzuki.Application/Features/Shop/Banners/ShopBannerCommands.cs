@@ -2,6 +2,7 @@ using FluentValidation;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
+using PakSuzuki.Application.Common.Images;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Common.Models;
 using PakSuzuki.Domain.Entities;
@@ -68,6 +69,7 @@ public class UpsertShopBannerCommandValidator : AbstractValidator<UpsertShopBann
     {
         RuleFor(x => x.ProductCode).NotEmpty().MaximumLength(50);
         RuleFor(x => x.CategoryName).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.ImageUrl).NotEmpty().WithMessage("Banner image is required.");
         RuleFor(x => x.BannerName).MaximumLength(200)
             .When(x => x.Type == ShopBannerType.Category);
     }
@@ -143,7 +145,18 @@ public class UploadShopBannerImageCommandHandler : IRequestHandler<UploadShopBan
     {
         var banner = await _context.ShopBanners.FirstOrDefaultAsync(b => b.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(ShopBanner), request.Id);
-        var url = await _files.UploadAsync(request.Content, request.FileName, Container, ct);
+
+        await using var buffer = new MemoryStream();
+        await request.Content.CopyToAsync(buffer, ct);
+        buffer.Position = 0;
+
+        var kind = banner.Type == ShopBannerType.Header
+            ? BannerImageAspect.Header
+            : BannerImageAspect.Category;
+        BannerImageAspect.EnsureValid(buffer, kind);
+
+        buffer.Position = 0;
+        var url = await _files.UploadAsync(buffer, request.FileName, Container, ct);
         banner.ImageUrl = url;
         await _context.SaveChangesAsync(ct);
         return url;

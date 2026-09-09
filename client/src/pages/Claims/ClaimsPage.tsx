@@ -7,6 +7,7 @@ import { StatCard, StatCardRow } from '@/components/ui/StatCard'
 import {
   OrderTable, ExportExcelButton, DateFilterField, FilterSelect, ListTabPill
 } from '@/components/ui/DataTable'
+import { downloadExcel, fetchAllFromApi, exportFailed } from '@/utils/excelExport'
 import clsx from 'clsx'
 import {
   claimStatusLabel,
@@ -26,6 +27,7 @@ export default function ClaimsPage() {
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [claimFilter, setClaimFilter] = useState('all')
+  const [exporting, setExporting] = useState(false)
 
   const statusParam = useMemo(() => {
     if (tab === 'process') return 'InProcess'
@@ -55,7 +57,42 @@ export default function ClaimsPage() {
   })
 
   const stats = statsQuery.data
-  const items = listQuery.data?.items ?? []
+  const items = useMemo(() => {
+    let list = listQuery.data?.items ?? []
+    if (claimFilter === 'with-order') list = list.filter((c) => !!c.orderNumber)
+    if (claimFilter === 'no-order') list = list.filter((c) => !c.orderNumber)
+    return list
+  }, [listQuery.data?.items, claimFilter])
+
+  async function exportClaims() {
+    setExporting(true)
+    try {
+      const all = await fetchAllFromApi<ClaimListRow>('/claims', {
+        status: statusParam,
+        search: search || undefined,
+        from: fromDate || undefined,
+        to: toDate || undefined
+      })
+      let rows = all
+      if (claimFilter === 'with-order') rows = rows.filter((c) => !!c.orderNumber)
+      if (claimFilter === 'no-order') rows = rows.filter((c) => !c.orderNumber)
+
+      downloadExcel(
+        `claims-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
+        [
+          { header: 'Claims Date', value: (c) => formatClaimDate(c.createdAtUtc) },
+          { header: 'Order Number', value: (c) => c.orderNumber ?? '' },
+          { header: 'Distributor Name', value: (c) => c.distributorName },
+          { header: 'Claims Status', value: (c) => claimStatusLabel(c.status) }
+        ],
+        rows
+      )
+    } catch (err) {
+      exportFailed(err)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -132,7 +169,7 @@ export default function ClaimsPage() {
             <DateFilterField value={toDate} onChange={(v) => { setToDate(v); setPage(1) }} />
           </>
         }
-        toolbarActions={<ExportExcelButton />}
+        toolbarActions={<ExportExcelButton onClick={() => void exportClaims()} loading={exporting} />}
         columns={[
           { key: 'date', header: 'Claims Date' },
           { key: 'number', header: 'Order Number' },

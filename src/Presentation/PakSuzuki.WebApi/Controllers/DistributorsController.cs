@@ -5,6 +5,7 @@ using PakSuzuki.Application.Features.Distributors.Commands;
 using PakSuzuki.Application.Features.Distributors.Queries;
 using PakSuzuki.Application.Features.Maps.Queries;
 using PakSuzuki.Domain.Enums;
+using PakSuzuki.WebApi.Common;
 
 namespace PakSuzuki.WebApi.Controllers;
 
@@ -13,20 +14,31 @@ public class DistributorsController : BaseApiController
     private readonly ICurrentUserService _currentUser;
     public DistributorsController(ICurrentUserService currentUser) => _currentUser = currentUser;
 
+    /// <summary>
+    /// Distributor sign-up. Sent as multipart/form-data because the applicant uploads real photos:
+    /// an optional profile photo (<c>profileImage</c>) and at least one shop photo (<c>businessImages</c>).
+    /// </summary>
     [HttpPost("register")]
     [AllowAnonymous]
-    [Consumes("application/json")]
-    public async Task<IActionResult> Register([FromBody] RegisterDistributorRequest request)
+    [RequestSizeLimit(50_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> Register([FromForm] RegisterDistributorRequest request)
     {
+        var imageErrors = ImageUploadRules.Validate(
+            request.ProfileImage, request.BusinessImages, businessImagesRequired: true);
+        if (imageErrors.Count > 0) return ValidationProblem(imageErrors);
+
         var id = await Mediator.Send(new RegisterDistributorCommand(
             request.Name, request.Cnic, request.MobileNumber, request.Email, request.Password,
             request.BusinessName, request.Ntn, request.Iban, request.BusinessAddress,
-            request.Latitude, request.Longitude, request.RegionId, request.BusinessImageUrls));
+            request.Latitude, request.Longitude, request.RegionId,
+            ImageUploadRules.ToUploadedImage(request.ProfileImage),
+            ImageUploadRules.ToUploadedImages(request.BusinessImages)));
+
         return CreatedAtAction(nameof(GetById), new { id }, new
         {
             id,
-            message = "Registered. Upload images via POST /api/distributors/business-images/{id}.",
-            nextStep = $"POST /api/distributors/business-images/{id}"
+            message = "Registered with your photos. Pak Suzuki Super Admin will review the application."
         });
     }
 
@@ -102,7 +114,8 @@ public class DistributorsController : BaseApiController
     {
         await Mediator.Send(new UpdateDistributorCommand(
             id, request.Name, request.MobileNumber, request.Email, request.BusinessName,
-            request.Ntn, request.Iban, request.BusinessAddress, request.Latitude, request.Longitude));
+            request.Ntn, request.Iban, request.BusinessAddress, request.Latitude, request.Longitude,
+            request.SapDealerCode, request.SapShipToCode));
         return NoContent();
     }
 
@@ -122,29 +135,72 @@ public class DistributorsController : BaseApiController
         return NoContent();
     }
 
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> SoftDelete(Guid id)
+    {
+        await Mediator.Send(new SoftDeleteDistributorCommand(id));
+        return NoContent();
+    }
+
+    /// <summary>Add more shop photos to an existing distributor (multipart field name: files).</summary>
     [HttpPost("business-images/{id:guid}")]
-    [AllowAnonymous]
+    [Authorize]
     [RequestSizeLimit(50_000_000)]
+    [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadBusinessImages(Guid id, [FromForm] List<IFormFile> files)
     {
-        if (files is null || files.Count == 0)
-            return BadRequest(new { title = "Validation failed", errors = new { files = new[] { "At least one image file is required (form field name: files)." } } });
+        var errors = ImageUploadRules.Validate(
+            null, files, businessImagesRequired: true, businessField: "files");
+        if (errors.Count > 0) return ValidationProblem(errors);
 
-        var payloads = files.Where(f => f.Length > 0).Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
-        if (payloads.Count == 0)
-            return BadRequest(new { title = "Validation failed", errors = new { files = new[] { "Uploaded files were empty." } } });
-
+        var payloads = ImageUploadRules.ToUploadedImages(files)
+            .Select(i => (i.FileName, i.Content)).ToList();
         var urls = await Mediator.Send(new UploadDistributorBusinessImagesCommand(id, payloads));
-        return Ok(new { urls, message = "Images uploaded. Await Super Admin approval." });
+        return Ok(new { urls, message = "Images uploaded." });
+    }
+
+    /// <summary>Replace the profile / avatar photo (multipart field name: file). Mobile + web.</summary>
+    [HttpPost("profile-image/{id:guid}")]
+    [Authorize]
+    [RequestSizeLimit(20_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadProfileImage(Guid id, IFormFile file)
+    {
+        var errors = ImageUploadRules.ValidateSingle(file);
+        if (errors.Count > 0) return ValidationProblem(errors);
+
+        await using var stream = file.OpenReadStream();
+        var url = await Mediator.Send(new UploadDistributorProfileImageCommand(id, file.FileName, stream));
+        return Ok(new { url });
     }
 }
 
-public record RegisterDistributorRequest(
-    string Name, string Cnic, string MobileNumber, string Email, string Password,
-    string BusinessName, string Ntn, string Iban, string BusinessAddress,
-    double Latitude, double Longitude, Guid RegionId, List<string>? BusinessImageUrls = null);
+/// <summary>Distributor sign-up form (multipart/form-data: text fields + photo files).</summary>
+public class RegisterDistributorRequest
+{
+    public string Name { get; set; } = "";
+    public string Cnic { get; set; } = "";
+    public string MobileNumber { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Password { get; set; } = "";
+    public string BusinessName { get; set; } = "";
+    public string Ntn { get; set; } = "";
+    public string Iban { get; set; } = "";
+    public string BusinessAddress { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public Guid RegionId { get; set; }
+
+    /// <summary>Optional profile / owner photo.</summary>
+    public IFormFile? ProfileImage { get; set; }
+
+    /// <summary>Shop / business photos — at least one is required.</summary>
+    public List<IFormFile>? BusinessImages { get; set; }
+}
 
 public record ApproveDistributorRequest(ApprovalStatus Decision, string? Remarks);
 public record UpdateDistributorRequest(
     string Name, string MobileNumber, string Email, string BusinessName,
-    string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude);
+    string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude,
+    string? SapDealerCode = null, string? SapShipToCode = null);

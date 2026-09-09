@@ -21,6 +21,8 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
             .HasForeignKey(v => v.ProductId).OnDelete(DeleteBehavior.Cascade);
         builder.HasMany(p => p.SectionImages).WithOne(i => i.Product)
             .HasForeignKey(i => i.ProductId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(p => p.CatalogProfile).WithOne(c => c.Product)
+            .HasForeignKey<ProductCatalogProfile>(c => c.ProductId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

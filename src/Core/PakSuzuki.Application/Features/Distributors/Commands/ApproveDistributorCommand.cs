@@ -29,6 +29,7 @@ public class ApproveDistributorCommandHandler : IRequestHandler<ApproveDistribut
     private readonly IDateTimeService _dateTime;
     private readonly IIdentityService _identity;
     private readonly IEmailNotificationService _email;
+    private readonly IAppNotificationService _notifications;
     private readonly ILogger<ApproveDistributorCommandHandler> _logger;
 
     public ApproveDistributorCommandHandler(
@@ -37,6 +38,7 @@ public class ApproveDistributorCommandHandler : IRequestHandler<ApproveDistribut
         IDateTimeService dateTime,
         IIdentityService identity,
         IEmailNotificationService email,
+        IAppNotificationService notifications,
         ILogger<ApproveDistributorCommandHandler> logger)
     {
         _context = context;
@@ -44,6 +46,7 @@ public class ApproveDistributorCommandHandler : IRequestHandler<ApproveDistribut
         _dateTime = dateTime;
         _identity = identity;
         _email = email;
+        _notifications = notifications;
         _logger = logger;
     }
 
@@ -61,6 +64,7 @@ public class ApproveDistributorCommandHandler : IRequestHandler<ApproveDistribut
             distributor.ApprovedByUserId = _currentUser.UserId;
             distributor.IsActive = true;
             await _identity.SetUserActiveAsync(distributor.ApplicationUserId, true, ct);
+            await _identity.TouchLastLoginAsync(distributor.ApplicationUserId, ct);
         }
         else
         {
@@ -72,6 +76,16 @@ public class ApproveDistributorCommandHandler : IRequestHandler<ApproveDistribut
         }
 
         await _context.SaveChangesAsync(ct);
+
+        await _notifications.NotifyUserAsync(
+            distributor.ApplicationUserId,
+            "Registration update",
+            $"Your distributor registration was marked as {request.Decision}.",
+            NotificationCategories.Registration,
+            "/settings",
+            distributor.Id,
+            ct);
+
         await NotifyDecisionAsync(distributor.Email, distributor.Name, "Distributor", request.Decision, request.Remarks, ct);
     }
 

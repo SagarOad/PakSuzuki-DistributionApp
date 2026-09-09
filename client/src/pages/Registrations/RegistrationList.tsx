@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
 import clsx from 'clsx'
 
 interface RetailerRow {
@@ -11,6 +13,8 @@ interface RetailerRow {
   distributorApprovalStatus: string
   superAdminApprovalStatus: string
   createdAtUtc: string
+  profileImageUrl?: string | null
+  photoCount?: number
 }
 
 interface DistributorRow {
@@ -23,6 +27,7 @@ interface DistributorRow {
   email: string
   mobileNumber: string
   createdAtUtc: string
+  profileImageUrl?: string | null
 }
 
 interface PagedResult<T> { items: T[] }
@@ -102,6 +107,8 @@ export default function RegistrationList() {
               title={d.name}
               subtitle={`${d.businessName} · ${d.regionName} · ${d.email}`}
               badges={[<StatusBadge key="s" label="Status" status={d.approvalStatus} />]}
+              imageUrl={d.profileImageUrl}
+              profileHref={`/distributors/${d.id}`}
               remarksId={d.id}
               onRemarks={(v) => setRemarksById((prev) => ({ ...prev, [d.id]: v }))}
               onApprove={() => approveDistributor.mutate({ id: d.id, decision: 'Approved' })}
@@ -131,6 +138,9 @@ export default function RegistrationList() {
                 <StatusBadge key="d" label="Distributor" status={r.distributorApprovalStatus} />,
                 <StatusBadge key="s" label="Super Admin" status={r.superAdminApprovalStatus} />
               ]}
+              imageUrl={r.profileImageUrl}
+              profileHref={`/retailers/${r.id}`}
+              photoCount={r.photoCount}
               remarksId={r.id}
               onRemarks={(v) => setRemarksById((prev) => ({ ...prev, [r.id]: v }))}
               onApprove={() => approveRetailer.mutate({ id: r.id, decision: 'Approved' })}
@@ -201,6 +211,9 @@ function Card({
   title,
   subtitle,
   badges,
+  imageUrl,
+  profileHref,
+  photoCount,
   remarksId,
   onRemarks,
   onApprove,
@@ -210,6 +223,9 @@ function Card({
   title: string
   subtitle: string
   badges: React.ReactNode[]
+  imageUrl?: string | null
+  profileHref: string
+  photoCount?: number
   remarksId: string
   onRemarks: (value: string) => void
   onApprove: () => void
@@ -218,10 +234,23 @@ function Card({
 }) {
   return (
     <div className="bg-white rounded-xl border border-navy-100 p-5 flex items-center justify-between gap-4">
-      <div>
-        <div className="font-medium text-navy-950">{title}</div>
-        <div className="text-sm text-navy-600">{subtitle}</div>
-        <div className="flex gap-2 mt-2">{badges}</div>
+      <div className="flex items-center gap-3">
+        <PlaceholderImage
+          src={imageUrl}
+          alt={title}
+          className="h-12 w-12 shrink-0 rounded-xl border border-navy-100 bg-navy-50"
+          imgClassName="h-full w-full object-cover"
+        />
+        <div>
+          <div className="font-medium text-navy-950">{title}</div>
+          <div className="text-sm text-navy-600">{subtitle}</div>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            {badges}
+            <Link to={profileHref} className="text-xs font-semibold text-suzuki-blue hover:underline">
+              View profile{typeof photoCount === 'number' ? ` & ${photoCount} photo${photoCount === 1 ? '' : 's'}` : ' & photos'}
+            </Link>
+          </div>
+        </div>
       </div>
       <div className="flex items-center gap-2">
         <input

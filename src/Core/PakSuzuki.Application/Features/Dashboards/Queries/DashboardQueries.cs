@@ -21,6 +21,23 @@ internal static class OrderStatusHelper
     {
         OrderStatus.InvoiceConfirmed, OrderStatus.Cancelled, OrderStatus.RejectedByDistributor
     };
+
+    /// <summary>Matches client COMPLETED_STATUSES on Orders pages.</summary>
+    public static readonly OrderStatus[] CompletedStatuses =
+    {
+        OrderStatus.Delivered, OrderStatus.InvoiceConfirmed
+    };
+
+    /// <summary>Matches client CANCELED_STATUSES on Orders pages.</summary>
+    public static readonly OrderStatus[] CancelledStatuses =
+    {
+        OrderStatus.Cancelled, OrderStatus.RejectedByDistributor
+    };
+
+    public static bool IsCompleted(OrderStatus status) => CompletedStatuses.Contains(status);
+    public static bool IsCancelled(OrderStatus status) => CancelledStatuses.Contains(status);
+    public static bool IsInProgress(OrderStatus status) =>
+        !IsCompleted(status) && !IsCancelled(status);
 }
 
 // 3.9/3.10: platform-wide overview for SuperAdmin/Admin - order volume, sales,
@@ -87,9 +104,13 @@ public class GetSuperAdminDashboardQueryHandler : IRequestHandler<GetSuperAdminD
                 x.OrderCount))
             .ToList();
 
-        var totalDistributors = await _context.Distributors.CountAsync(ct);
-        var activeDistributors = await _context.Distributors.CountAsync(d => d.IsActive && d.ApprovalStatus == ApprovalStatus.Approved, ct);
-        var totalRetailers = await _context.Retailers.CountAsync(ct);
+        var totalDistributors = await _context.Distributors
+            .CountAsync(d => d.IsActive && d.ApprovalStatus == ApprovalStatus.Approved, ct);
+        var activeDistributors = totalDistributors;
+        var totalRetailers = await _context.Retailers
+            .CountAsync(r => r.IsActive
+                && r.DistributorApprovalStatus == ApprovalStatus.Approved
+                && r.SuperAdminApprovalStatus == ApprovalStatus.Approved, ct);
 
         return new SuperAdminDashboardDto(
             totalOrders, totalSales, pendingDistributorApprovals, pendingRetailerApprovals,
@@ -102,6 +123,7 @@ public class GetSuperAdminDashboardQueryHandler : IRequestHandler<GetSuperAdminD
 // open-order backlog, and monthly target achievement (Targets table).
 public record DistributorDashboardDto(
     int TotalRetailers, int TotalOrders, int OpenOrders, decimal TotalSales,
+    int InProgressOrders, int CancelOrders, int CompleteOrders,
     List<TargetAchievementDto> Targets, List<RecentOrderDto> RecentOrders);
 
 public record GetDistributorDashboardQuery(Guid DistributorId) : IRequest<DistributorDashboardDto>;
@@ -115,9 +137,18 @@ public class GetDistributorDashboardQueryHandler : IRequestHandler<GetDistributo
     {
         var ordersQuery = _context.Orders.Where(o => o.DistributorId == request.DistributorId);
 
-        var totalRetailers = await _context.Retailers.CountAsync(r => r.DistributorId == request.DistributorId, ct);
+        var totalRetailers = await _context.Retailers.CountAsync(r =>
+            r.DistributorId == request.DistributorId
+            && r.IsActive
+            && r.DistributorApprovalStatus == ApprovalStatus.Approved
+            && r.SuperAdminApprovalStatus == ApprovalStatus.Approved, ct);
         var totalOrders = await ordersQuery.CountAsync(ct);
         var openOrders = await ordersQuery.CountAsync(o => !OrderStatusHelper.TerminalStatuses.Contains(o.Status), ct);
+        var inProgressOrders = await ordersQuery.CountAsync(o =>
+            !OrderStatusHelper.CompletedStatuses.Contains(o.Status)
+            && !OrderStatusHelper.CancelledStatuses.Contains(o.Status), ct);
+        var cancelOrders = await ordersQuery.CountAsync(o => OrderStatusHelper.CancelledStatuses.Contains(o.Status), ct);
+        var completeOrders = await ordersQuery.CountAsync(o => OrderStatusHelper.CompletedStatuses.Contains(o.Status), ct);
         var totalSales = await ordersQuery.SumAsync(o => (decimal?)o.GrandTotal, ct) ?? 0;
 
         var targets = await _context.Targets
@@ -133,7 +164,10 @@ public class GetDistributorDashboardQueryHandler : IRequestHandler<GetDistributo
             .Select(o => new RecentOrderDto(o.Id, o.OrderNumber, o.Status.ToString(), o.GrandTotal, o.CreatedAtUtc))
             .ToListAsync(ct);
 
-        return new DistributorDashboardDto(totalRetailers, totalOrders, openOrders, totalSales, targets, recentOrders);
+        return new DistributorDashboardDto(
+            totalRetailers, totalOrders, openOrders, totalSales,
+            inProgressOrders, cancelOrders, completeOrders,
+            targets, recentOrders);
     }
 }
 
@@ -141,6 +175,7 @@ public class GetDistributorDashboardQueryHandler : IRequestHandler<GetDistributo
 // targeted at the Retailer role that are currently within their active date range.
 public record RetailerDashboardDto(
     int TotalOrders, decimal TotalSpent, List<OrderStatusCountDto> StatusCounts,
+    int InProgressOrders, int CancelOrders, int CompleteOrders,
     List<ActivePromotionDto> ActivePromotions, List<RecentOrderDto> RecentOrders);
 
 public record GetRetailerDashboardQuery(Guid RetailerId) : IRequest<RetailerDashboardDto>;
@@ -162,6 +197,11 @@ public class GetRetailerDashboardQueryHandler : IRequestHandler<GetRetailerDashb
 
         var totalOrders = await ordersQuery.CountAsync(ct);
         var totalSpent = await ordersQuery.SumAsync(o => (decimal?)o.GrandTotal, ct) ?? 0;
+        var inProgressOrders = await ordersQuery.CountAsync(o =>
+            !OrderStatusHelper.CompletedStatuses.Contains(o.Status)
+            && !OrderStatusHelper.CancelledStatuses.Contains(o.Status), ct);
+        var cancelOrders = await ordersQuery.CountAsync(o => OrderStatusHelper.CancelledStatuses.Contains(o.Status), ct);
+        var completeOrders = await ordersQuery.CountAsync(o => OrderStatusHelper.CompletedStatuses.Contains(o.Status), ct);
 
         var statusCounts = await ordersQuery
             .GroupBy(o => o.Status)
@@ -181,7 +221,10 @@ public class GetRetailerDashboardQueryHandler : IRequestHandler<GetRetailerDashb
             .Select(o => new RecentOrderDto(o.Id, o.OrderNumber, o.Status.ToString(), o.GrandTotal, o.CreatedAtUtc))
             .ToListAsync(ct);
 
-        return new RetailerDashboardDto(totalOrders, totalSpent, statusCounts, activePromotions, recentOrders);
+        return new RetailerDashboardDto(
+            totalOrders, totalSpent, statusCounts,
+            inProgressOrders, cancelOrders, completeOrders,
+            activePromotions, recentOrders);
     }
 }
 
@@ -338,7 +381,11 @@ internal static class ProfileStatsHelper
 
         var totalRetailers = retailerCount
             ?? (distributorIdForRetailerCount is Guid did
-                ? await context.Retailers.CountAsync(r => r.DistributorId == did, ct)
+                ? await context.Retailers.CountAsync(r =>
+                    r.DistributorId == did
+                    && r.IsActive
+                    && r.DistributorApprovalStatus == ApprovalStatus.Approved
+                    && r.SuperAdminApprovalStatus == ApprovalStatus.Approved, ct)
                 : 0);
 
         var ordersByStatus = await ordersQuery

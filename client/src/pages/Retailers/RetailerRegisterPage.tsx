@@ -4,6 +4,7 @@ import axios from 'axios'
 import { Search } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { BrandPair } from '@/components/brand/Logos'
+import ImageUploadFields from '@/components/forms/ImageUploadFields'
 import LocationPickerMap, { type LatLng } from '@/components/maps/LocationPickerMap'
 
 interface NearestDistributor {
@@ -37,6 +38,8 @@ export default function RetailerRegisterPage() {
   const [form, setForm] = useState(emptyForm)
   const [location, setLocation] = useState<LatLng | null>(null)
   const [assigned, setAssigned] = useState<NearestDistributor | null>(null)
+  const [profileImage, setProfileImage] = useState<File | null>(null)
+  const [businessImages, setBusinessImages] = useState<File[]>([])
   const [findError, setFindError] = useState<string | null>(null)
   const [finding, setFinding] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -109,36 +112,45 @@ export default function RetailerRegisterPage() {
       setError('Password must be at least 8 characters.')
       return
     }
+    if (businessImages.length === 0) {
+      setError('Please add at least one shop / business photo from your camera or gallery.')
+      return
+    }
 
     setLoading(true)
     try {
+      const body = new FormData()
+      body.append('name', form.name.trim())
+      body.append('cnic', form.cnic.trim())
+      body.append('mobileNumber', form.mobileNumber.trim())
+      body.append('email', form.email.trim())
+      body.append('password', form.password)
+      body.append('businessName', form.businessName.trim())
+      body.append('ntn', form.ntn.trim())
+      body.append('iban', form.iban.trim())
+      body.append('businessAddress', form.businessAddress.trim())
+      body.append('latitude', String(location.latitude))
+      body.append('longitude', String(location.longitude))
+      body.append('distributorId', assigned.id)
+      if (profileImage) body.append('profileImage', profileImage)
+      businessImages.forEach((file) => body.append('businessImages', file))
+
       const { data } = await api.post<{
         id: string
         distributorId: string
         distributorName: string
         distanceKm?: number
-      }>('/retailers/register', {
-        name: form.name.trim(),
-        cnic: form.cnic.trim(),
-        mobileNumber: form.mobileNumber.trim(),
-        email: form.email.trim(),
-        password: form.password,
-        businessName: form.businessName.trim(),
-        ntn: form.ntn.trim(),
-        iban: form.iban.trim(),
-        businessAddress: form.businessAddress.trim(),
-        latitude: location.latitude,
-        longitude: location.longitude,
-        distributorId: assigned.id
-      })
+      }>('/retailers/register', body)
       setSuccess(
-        `Registration submitted and assigned to ${data.distributorName || assigned.businessName}. ` +
+        `Registration submitted with your photos and assigned to ${data.distributorName || assigned.businessName}. ` +
           'Your distributor and Pakistan Suzuki Super Admin will review your application. ' +
           'After approval, use the mobile app to sign in.'
       )
       setForm(emptyForm)
       setLocation(null)
       setAssigned(null)
+      setProfileImage(null)
+      setBusinessImages([])
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const data = err.response?.data as {
@@ -292,6 +304,16 @@ export default function RetailerRegisterPage() {
             {findError && (
               <p className="text-sm font-medium text-suzuki-red">{findError}</p>
             )}
+          </Section>
+
+          <Section title="Photos">
+            <ImageUploadFields
+              profileImage={profileImage}
+              businessImages={businessImages}
+              onProfileChange={setProfileImage}
+              onBusinessChange={setBusinessImages}
+              businessHint="Shop front, signboard or interior. Your distributor uses these to verify your shop."
+            />
           </Section>
 
           {error && (

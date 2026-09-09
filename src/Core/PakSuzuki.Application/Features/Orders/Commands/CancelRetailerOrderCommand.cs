@@ -23,13 +23,18 @@ public class CancelRetailerOrderCommandHandler : IRequestHandler<CancelRetailerO
     private readonly IApplicationDbContext _context;
     private readonly ICurrentUserService _currentUser;
     private readonly IDateTimeService _dateTime;
+    private readonly IAppNotificationService _notifications;
 
     public CancelRetailerOrderCommandHandler(
-        IApplicationDbContext context, ICurrentUserService currentUser, IDateTimeService dateTime)
+        IApplicationDbContext context,
+        ICurrentUserService currentUser,
+        IDateTimeService dateTime,
+        IAppNotificationService notifications)
     {
         _context = context;
         _currentUser = currentUser;
         _dateTime = dateTime;
+        _notifications = notifications;
     }
 
     public async Task Handle(CancelRetailerOrderCommand request, CancellationToken ct)
@@ -55,5 +60,14 @@ public class CancelRetailerOrderCommandHandler : IRequestHandler<CancelRetailerO
             order.DistributorRemarks = request.Remarks;
         order.DistributorActionedAtUtc = _dateTime.UtcNow;
         await _context.SaveChangesAsync(ct);
+
+        await _notifications.NotifyDistributorAsync(
+            order.DistributorId,
+            "Order cancelled",
+            $"Retailer cancelled order {order.OrderNumber}.",
+            NotificationCategories.Order,
+            $"/orders/{order.Id}",
+            order.Id,
+            ct);
     }
 }

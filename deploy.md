@@ -46,9 +46,16 @@ contact, or zip it for a VPS deploy.
 1. Install the **.NET 8 Hosting Bundle** (not just the runtime) — this gives IIS the
    ASP.NET Core Module (ANCM) needed to proxy into Kestrel. Without it, IIS will 500 on every request.
 2. Create one IIS site pointing at the `publish/` folder. One site, one app pool, one binding — no second site for the React app.
-3. Point the connection string (`appsettings.json` → `ConnectionStrings:DefaultConnection`, or an environment variable override) at their SQL Server instance.
-4. Set `Jwt:Secret` via environment variable or IIS `applicationHost.config`, never left as the placeholder value from `appsettings.json`.
-5. Hit `https://<their-server>/swagger` to confirm the API is up, then `https://<their-server>/` to confirm the dashboard loads and deep-links (e.g. `/orders`) survive a refresh.
+3. App pool: **.NET CLR version = No Managed Code**.
+4. Edit **`appsettings.Production.json`** on the server (IIS runs as Production — do **not** rely on `appsettings.Development.json`):
+   - `ConnectionStrings:DefaultConnection` — use `Trusted_Connection=True` **or** SQL User Id/Password.
+   - **Create the empty database once in SSMS before first start** (IIS almost never can `CREATE DATABASE`):
+     `CREATE DATABASE [distribution];`
+     Then grant the IIS app-pool Windows login access to that DB (`db_owner`).
+   - Set a real `Jwt:Secret` (32+ random characters).
+5. Give the app-pool identity **Modify** rights on the site folder (for `logs\` and `email-outbox\`).
+6. If you still get **500.30**, open `logs\stdout_*.log` under the site (stdout logging is enabled in `web.config`).
+7. Hit `https://<their-server>/swagger` then `https://<their-server>/`.
 
 ## Why this holds up
 

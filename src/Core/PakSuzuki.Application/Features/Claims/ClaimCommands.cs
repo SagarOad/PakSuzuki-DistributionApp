@@ -157,12 +157,15 @@ public class CreateClaimCommandHandler : IRequestHandler<CreateClaimCommand, Gui
 {
     private readonly IApplicationDbContext _context;
     private readonly IFileStorageService _files;
+    private readonly IAppNotificationService _notifications;
     private const string Container = "claim-images";
 
-    public CreateClaimCommandHandler(IApplicationDbContext context, IFileStorageService files)
+    public CreateClaimCommandHandler(
+        IApplicationDbContext context, IFileStorageService files, IAppNotificationService notifications)
     {
         _context = context;
         _files = files;
+        _notifications = notifications;
     }
 
     public async Task<Guid> Handle(CreateClaimCommand request, CancellationToken ct)
@@ -209,6 +212,15 @@ public class CreateClaimCommandHandler : IRequestHandler<CreateClaimCommand, Gui
 
         _context.OrderClaims.Add(claim);
         await _context.SaveChangesAsync(ct);
+
+        await _notifications.NotifyStaffAsync(
+            "New claim submitted",
+            $"{distributor.Name} submitted a claim for review.",
+            NotificationCategories.Claim,
+            $"/claims/{claim.Id}",
+            claim.Id,
+            ct);
+
         return claim.Id;
     }
 }
@@ -217,11 +229,14 @@ public class ActionClaimCommandHandler : IRequestHandler<ActionClaimCommand>
 {
     private readonly IApplicationDbContext _context;
     private readonly IDateTimeService _dateTime;
+    private readonly IAppNotificationService _notifications;
 
-    public ActionClaimCommandHandler(IApplicationDbContext context, IDateTimeService dateTime)
+    public ActionClaimCommandHandler(
+        IApplicationDbContext context, IDateTimeService dateTime, IAppNotificationService notifications)
     {
         _context = context;
         _dateTime = dateTime;
+        _notifications = notifications;
     }
 
     public async Task Handle(ActionClaimCommand request, CancellationToken ct)
@@ -236,5 +251,26 @@ public class ActionClaimCommandHandler : IRequestHandler<ActionClaimCommand>
         claim.StaffRemarks = request.Remarks;
         claim.ActionedAtUtc = _dateTime.UtcNow;
         await _context.SaveChangesAsync(ct);
+
+        await _notifications.NotifyDistributorAsync(
+            claim.DistributorId,
+            "Claim updated",
+            $"Your claim was marked as {claim.Status}.",
+            NotificationCategories.Claim,
+            $"/claims/{claim.Id}",
+            claim.Id,
+            ct);
+
+        if (claim.RetailerId is Guid retailerId)
+        {
+            await _notifications.NotifyRetailerAsync(
+                retailerId,
+                "Claim updated",
+                $"A claim linked to you was marked as {claim.Status}.",
+                NotificationCategories.Claim,
+                $"/claims/{claim.Id}",
+                claim.Id,
+                ct);
+        }
     }
 }

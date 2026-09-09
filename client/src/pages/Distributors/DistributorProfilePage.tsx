@@ -3,11 +3,14 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ShoppingBasket, CheckCircle2, XCircle, Clock, Package, MapPin,
-  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft, ImageIcon
+  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { StatCard } from '@/components/ui/StatCard'
 import { ProfileChart, useChartPeriod } from '@/components/ui/ProfileChart'
+import ImageGallery from '@/components/ui/ImageGallery'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
+import { downloadExcel, fetchAllFromApi } from '@/utils/excelExport'
 import clsx from 'clsx'
 
 interface DistributorDetail {
@@ -26,6 +29,7 @@ interface DistributorDetail {
   regionName: string
   approvalStatus: string
   isActive: boolean
+  profileImageUrl?: string | null
   images: { id: string; storageUrl: string; fileName: string }[]
 }
 
@@ -64,6 +68,7 @@ export default function DistributorProfilePage() {
   const [period, setPeriod] = useChartPeriod('Month')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [exporting, setExporting] = useState(false)
 
   const detailQuery = useQuery({
     queryKey: ['distributor-detail', id],
@@ -112,6 +117,31 @@ export default function DistributorProfilePage() {
     return `Showing ${String(start).padStart(2, '0')} to ${String(end).padStart(2, '0')} of ${rows.totalCount} entries`
   }, [retailersQuery.data])
 
+  async function exportRetailers() {
+    if (!id) return
+    setExporting(true)
+    try {
+      const all = await fetchAllFromApi<RetailerRow>('/retailers', {
+        distributorId: id,
+        search: search || undefined
+      })
+      downloadExcel(
+        `distributor-${d?.distributorCode ?? id}-retailers`,
+        [
+          { header: 'Retailer Name', value: (r) => r.name },
+          { header: 'Contact Number', value: (r) => r.mobileNumber },
+          { header: 'Email', value: (r) => r.email },
+          { header: 'Location', value: () => d?.regionName ?? '' },
+          { header: 'Address', value: (r) => r.businessAddress },
+          { header: 'Status', value: (r) => (r.isActive ? 'Active' : r.superAdminApprovalStatus) }
+        ],
+        all
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (detailQuery.isLoading) {
     return <div className="text-sm text-suzuki-mute py-10 text-center">Loading distributor profile…</div>
   }
@@ -145,7 +175,18 @@ export default function DistributorProfilePage() {
         {/* Left profile card */}
         <aside className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4 h-fit">
           <div>
-            <div className="text-xl font-extrabold text-suzuki-navy">{d.name}</div>
+            <div className="flex items-center gap-3">
+              <PlaceholderImage
+                src={d.profileImageUrl}
+                alt={d.name}
+                className="h-16 w-16 shrink-0 rounded-xl border border-suzuki-line bg-suzuki-mist"
+                imgClassName="h-full w-full object-cover"
+              />
+              <div>
+                <div className="text-lg font-extrabold text-suzuki-navy leading-tight">{d.name}</div>
+                <div className="text-xs text-suzuki-mute">{d.distributorCode} · {d.regionName}</div>
+              </div>
+            </div>
             <dl className="mt-3 space-y-2 text-sm">
               <InfoRow label="CNIC" value={d.cnic} />
               <InfoRow label="Contact Number" value={d.mobileNumber} />
@@ -175,24 +216,13 @@ export default function DistributorProfilePage() {
           </div>
 
           <div>
-            <div className="text-xs font-bold uppercase tracking-wide text-suzuki-mute mb-2">Attachments</div>
-            <div className="grid grid-cols-4 gap-2">
-              {Array.from({ length: 4 }).map((_, i) => {
-                const img = d.images?.[i]
-                return (
-                  <div
-                    key={img?.id ?? `placeholder-${i}`}
-                    className="aspect-square rounded-lg border border-suzuki-line bg-suzuki-mist flex items-center justify-center overflow-hidden"
-                  >
-                    {img?.storageUrl ? (
-                      <img src={img.storageUrl} alt={img.fileName || ''} className="w-full h-full object-cover" />
-                    ) : (
-                      <ImageIcon size={18} className="text-suzuki-mute" />
-                    )}
-                  </div>
-                )
-              })}
+            <div className="text-xs font-bold uppercase tracking-wide text-suzuki-mute mb-2">
+              Shop photos ({d.images?.length ?? 0})
             </div>
+            <ImageGallery
+              images={d.images ?? []}
+              emptyText="No shop photos were submitted with this registration."
+            />
           </div>
 
           <div
@@ -277,9 +307,11 @@ export default function DistributorProfilePage() {
               </div>
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-line px-3 py-2 text-xs font-semibold text-suzuki-blue"
+                disabled={exporting}
+                onClick={() => void exportRetailers()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-line px-3 py-2 text-xs font-semibold text-suzuki-blue disabled:opacity-50"
               >
-                <FileSpreadsheet size={14} /> Export Excel
+                <FileSpreadsheet size={14} /> {exporting ? 'Exporting…' : 'Export Excel'}
               </button>
             </div>
           </div>

@@ -15,17 +15,27 @@ public class OrdersController : BaseApiController
     public OrdersController(ICurrentUserService currentUser) => _currentUser = currentUser;
 
     /// <summary>
-    /// Retailer → assigned Distributor. Body is line items only; IDs come from JWT.
+    /// Retailer → assigned Distributor. Body matches distributor-direct (items + lane fields).
     /// </summary>
     [HttpPost]
     [Authorize(Policy = "RetailerOnly")]
-    public async Task<IActionResult> Create(List<CreateOrderItemDto> items)
+    public async Task<IActionResult> Create(CreateRetailerOrderBody body)
     {
         var retailerId = _currentUser.RetailerId ?? throw new UnauthorizedAccessException();
         var retailer = await Mediator.Send(new GetRetailerByIdQuery(retailerId, null));
-        var id = await Mediator.Send(new CreateOrderCommand(
-            OrderSourceType.RetailerOrder, retailerId, retailer.DistributorId, items));
-        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+        var result = await Mediator.Send(new CreateOrderCommand(
+            OrderSourceType.RetailerOrder,
+            retailerId,
+            retailer.DistributorId,
+            body.Items,
+            null,
+            body.VendorCode,
+            body.MaterialSourceCode,
+            body.DeliveryTypeCode,
+            body.DeliveryTypeName,
+            body.SupplierCode,
+            body.RetailerRemarks));
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
     }
 
     /// <summary>
@@ -55,13 +65,18 @@ public class OrdersController : BaseApiController
     public async Task<IActionResult> CreateDistributorDirect(CreateDistributorDirectBody body)
     {
         var distributorId = _currentUser.DistributorId ?? throw new UnauthorizedAccessException();
-        var id = await Mediator.Send(new CreateOrderCommand(
+        var result = await Mediator.Send(new CreateOrderCommand(
             OrderSourceType.DistributorDirectOrder,
             null,
             distributorId,
             body.Items,
-            body.OriginatingRetailerOrderId));
-        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+            body.OriginatingRetailerOrderId,
+            body.VendorCode,
+            body.MaterialSourceCode,
+            body.DeliveryTypeCode,
+            body.DeliveryTypeName,
+            body.SupplierCode));
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
     }
 
     [HttpGet]
@@ -125,15 +140,22 @@ public class OrdersController : BaseApiController
     [Authorize(Policy = "DistributorOnly")]
     public async Task<IActionResult> DistributorAction(Guid orderId, ApproveOrderBody body)
     {
-        await Mediator.Send(new ApproveOrderCommand(orderId, body.Decision, body.Remarks, body.AmendedItems));
+        await Mediator.Send(new ApproveOrderCommand(
+            orderId, body.Decision, body.Remarks, body.AmendedItems,
+            body.FulfillmentChoice, body.PakSuzukiShipTo));
         return NoContent();
     }
+
+    [HttpGet("middleware-pickup")]
+    [Authorize(Policy = "AdminOrAbove")]
+    public async Task<IActionResult> MiddlewarePickup([FromQuery] bool pendingOnly = true) =>
+        Ok(await Mediator.Send(new GetMiddlewarePickupQuery(pendingOnly)));
 
     [HttpPost("paksuzuki-action/{orderId:guid}")]
     [Authorize(Policy = "AdminOrAbove")]
     public async Task<IActionResult> PakSuzukiAction(Guid orderId, PakSuzukiActionBody body)
     {
-        await Mediator.Send(new PakSuzukiActionCommand(orderId, body.Decision, body.Remarks));
+        await Mediator.Send(new PakSuzukiActionCommand(orderId, body.Decision, body.Remarks, body.AmendedItems));
         return NoContent();
     }
 
@@ -142,6 +164,18 @@ public class OrdersController : BaseApiController
     public async Task<IActionResult> SubmitToSap(Guid orderId)
     {
         await Mediator.Send(new SubmitOrderToSapCommand(orderId));
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Re-queue an order after a SAP/middleware error. Will not create a second SAP order
+    /// if a sales order number already exists.
+    /// </summary>
+    [HttpPost("retry-sap/{orderId:guid}")]
+    [Authorize(Policy = "AdminOrAbove")]
+    public async Task<IActionResult> RetrySap(Guid orderId)
+    {
+        await Mediator.Send(new RetrySapOrderCommand(orderId));
         return NoContent();
     }
 
@@ -166,7 +200,19 @@ public class OrdersController : BaseApiController
         }
 
         await Mediator.Send(new UpdateOrderStatusCommand(orderId, body.Status, body.Remarks));
-        return NoContent();
+        return Ok(new
+        {
+            title = "Order status updated.",
+            orderId,
+            status = body.Status.ToString(),
+            message = body.Status switch
+            {
+                OrderStatus.PartiallyDelivered => "Delivery started (ready to ship / in process).",
+                OrderStatus.Delivered => "Order marked as delivered.",
+                OrderStatus.ApprovedByDistributor => "Order approved by distributor.",
+                _ => $"Order status set to {body.Status}."
+            }
+        });
     }
 
     [HttpGet("profit-calculation/{orderId:guid}")]
@@ -193,9 +239,32 @@ public class OrdersController : BaseApiController
         Ok(await Mediator.Send(new GetProofsOfDeliveryQuery(orderId)));
 }
 
-public record ApproveOrderBody(OrderStatus Decision, string? Remarks, List<ApproveOrderItemDto>? AmendedItems);
+public record ApproveOrderBody(
+    OrderStatus Decision,
+    string? Remarks,
+    List<ApproveOrderItemDto>? AmendedItems,
+    OrderFulfillmentChoice? FulfillmentChoice = null,
+    PakSuzukiShipTo? PakSuzukiShipTo = null);
 public record ResubmitOrderBody(string? Remarks, List<ResubmitOrderItemDto>? Items);
 public record CancelOrderBody(string? Remarks);
-public record CreateDistributorDirectBody(List<CreateOrderItemDto> Items, Guid? OriginatingRetailerOrderId = null);
-public record PakSuzukiActionBody(OrderStatus Decision, string? Remarks);
+public record CreateRetailerOrderBody(
+    List<CreateOrderItemDto> Items,
+    string? VendorCode = null,
+    string? MaterialSourceCode = null,
+    string? DeliveryTypeCode = null,
+    string? DeliveryTypeName = null,
+    string? SupplierCode = null,
+    string? RetailerRemarks = null);
+public record CreateDistributorDirectBody(
+    List<CreateOrderItemDto> Items,
+    Guid? OriginatingRetailerOrderId = null,
+    string? VendorCode = null,
+    string? MaterialSourceCode = null,
+    string? DeliveryTypeCode = null,
+    string? DeliveryTypeName = null,
+    string? SupplierCode = null);
+public record PakSuzukiActionBody(
+    OrderStatus Decision,
+    string? Remarks,
+    List<ApproveOrderItemDto>? AmendedItems = null);
 public record UpdateOrderStatusBody(OrderStatus Status, string? Remarks);

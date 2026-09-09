@@ -15,6 +15,17 @@ public interface IApplicationDbContext
     DbSet<ProductPrice> ProductPrices { get; }
     DbSet<ProductVariant> ProductVariants { get; }
     DbSet<ProductSectionImage> ProductSectionImages { get; }
+    DbSet<ProductCatalogProfile> ProductCatalogProfiles { get; }
+    DbSet<CatalogProductType> CatalogProductTypes { get; }
+    DbSet<CatalogCategory> CatalogCategories { get; }
+    DbSet<CatalogPType> CatalogPTypes { get; }
+    DbSet<CatalogSupplier> CatalogSuppliers { get; }
+    DbSet<CatalogSource> CatalogSources { get; }
+    DbSet<CatalogGstInvoiceType> CatalogGstInvoiceTypes { get; }
+    DbSet<CatalogSupplierRule> CatalogSupplierRules { get; }
+    DbSet<TaxRule> TaxRules { get; }
+    DbSet<DeliveryApprovalThreshold> DeliveryApprovalThresholds { get; }
+    DbSet<PriceVisibilityRule> PriceVisibilityRules { get; }
     DbSet<ShopBanner> ShopBanners { get; }
     DbSet<Order> Orders { get; }
     DbSet<OrderItem> OrderItems { get; }
@@ -23,12 +34,22 @@ public interface IApplicationDbContext
     DbSet<Incentive> Incentives { get; }
     DbSet<IncentiveParticipant> IncentiveParticipants { get; }
     DbSet<IncentiveAchievementSlab> IncentiveAchievementSlabs { get; }
+    DbSet<ProductGroup> ProductGroups { get; }
+    DbSet<ProductGroupMember> ProductGroupMembers { get; }
+    DbSet<IncentiveScheme> IncentiveSchemes { get; }
+    DbSet<IncentiveSchemeSlab> IncentiveSchemeSlabs { get; }
+    DbSet<IncentiveSchemeDistributor> IncentiveSchemeDistributors { get; }
     DbSet<OrderClaim> OrderClaims { get; }
     DbSet<ClaimImage> ClaimImages { get; }
     DbSet<SystemSetting> SystemSettings { get; }
     DbSet<SapOutboundQueue> SapOutboundQueues { get; }
+    DbSet<PartsOrder> PartsOrders { get; }
+    DbSet<PartsOrderLine> PartsOrderLines { get; }
+    DbSet<PartsDeliveryHeader> PartsDeliveryHeaders { get; }
+    DbSet<PartsDeliveryDetail> PartsDeliveryDetails { get; }
     DbSet<Target> Targets { get; }
     DbSet<RegionalHeadAssignment> RegionalHeadAssignments { get; }
+    DbSet<AppNotification> AppNotifications { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

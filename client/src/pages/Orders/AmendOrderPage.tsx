@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, FileSpreadsheet, ImageIcon, Minus, Plus, Trash2, X } from 'lucide-react'
-import clsx from 'clsx'
+import { AlertTriangle, FileSpreadsheet, ImageIcon, Minus, Plus, Trash2 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
-import { useCart, type CartLine } from '@/context/CartContext'
+import { downloadExcel } from '@/utils/excelExport'
 import {
   type OrderDetail,
   type OrderLineItem,
   formatOrderDate,
   formatRs,
   locationLine,
-  paymentLabel,
   toUiStatus
 } from './orderTypes'
 
@@ -58,18 +56,21 @@ function toAmendLine(item: OrderLineItem): AmendLine {
   }
 }
 
+type DistDecision = 'SentBackForModification' | 'RejectedByDistributor' | 'ForwardedToPakSuzuki'
+type StaffDecision = 'PendingPakSuzukiApproval' | 'PendingDistributorApproval' | 'Cancelled'
+
 export default function AmendOrderPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { role } = useAuth()
-  const { replaceFromRetailerOrder } = useCart()
   const qc = useQueryClient()
   const [note, setNote] = useState('')
   const [lines, setLines] = useState<AmendLine[]>([])
   const [hydrated, setHydrated] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [partialOpen, setPartialOpen] = useState(false)
-  const [partialQty, setPartialQty] = useState<Record<string, number>>({})
+
+  const isStaff = role === 'SuperAdmin' || role === 'Admin'
+  const isDistributor = role === 'Distributor'
 
   const detailQuery = useQuery({
     queryKey: ['order-detail', id],
@@ -78,22 +79,25 @@ export default function AmendOrderPage() {
   })
 
   const order = detailQuery.data
+  const statusCode = order?.statusCode || order?.status
   const uiStatus = order ? toUiStatus(order.status) : 'Pending'
-  const pay = order ? paymentLabel(order.status) : 'In Approval'
 
   useEffect(() => {
     setHydrated(false)
     setLines([])
     setNote('')
-    setPartialOpen(false)
   }, [id])
 
   useEffect(() => {
     if (!order || hydrated) return
     setLines(order.items.map(toAmendLine))
-    setNote(order.distributorRemarks || '')
+    setNote(
+      isStaff
+        ? order.pakSuzukiRemarks || order.distributorRemarks || ''
+        : order.distributorRemarks || ''
+    )
     setHydrated(true)
-  }, [order, hydrated])
+  }, [order, hydrated, isStaff])
 
   const visibleLines = lines.filter((l) => !l.removed)
 
@@ -103,49 +107,67 @@ export default function AmendOrderPage() {
       const rate = l.lineSubTotal > 0 ? l.lineGst / l.lineSubTotal : 0
       return s + l.unitPrice * l.quantity * rate
     }, 0)
-    const gstPercent = order?.gstPercent ?? (subtotal > 0 ? Math.round((gst / subtotal) * 100) : 18)
-    const total = subtotal + (subtotal * gstPercent) / 100
-    return { subtotal, gstPercent, total }
-  }, [visibleLines, order?.gstPercent])
+    const gstPercent = order?.gstPercent ?? (subtotal > 0 ? Math.round((gst / subtotal) * 10000) / 100 : 18)
+    const whtPercent = order?.whtPercent ?? 0
+    const wht = Math.round(((subtotal * whtPercent) / 100) * 100) / 100
+    const fed = order
+      ? Math.round(visibleLines.reduce((s, l) => {
+          const rate = l.lineSubTotal > 0 ? l.lineFed / l.lineSubTotal : 0
+          return s + l.unitPrice * l.quantity * rate
+        }, 0) * 100) / 100
+      : 0
+    const total = Math.round((subtotal + (subtotal * gstPercent) / 100 + fed + wht) * 100) / 100
+    return { subtotal, gstPercent, gst, fed, whtPercent, wht, total }
+  }, [visibleLines, order?.gstPercent, order?.whtPercent, order])
 
-  const action = useMutation({
-    mutationFn: async ({
-      decision,
-      amendedOverride
-    }: {
-      decision: 'SentBackForModification' | 'RejectedByDistributor' | 'PartiallyApprovedByDistributor'
-      amendedOverride?: { orderItemId: string; approvedQuantity: number }[]
-    }) => {
-      const amendedItems =
-        decision === 'SentBackForModification'
-          ? lines.map((l) => ({
-              orderItemId: l.id,
-              approvedQuantity: l.removed ? 0 : l.quantity
-            }))
-          : decision === 'PartiallyApprovedByDistributor'
-            ? amendedOverride ?? []
-            : null
+  const amendedItems = () =>
+    lines.map((l) => ({
+      orderItemId: l.id,
+      approvedQuantity: l.removed ? 0 : l.quantity
+    }))
+
+  const distAction = useMutation({
+    mutationFn: async (decision: DistDecision) => {
+      const isManufacturerResubmit = decision === 'ForwardedToPakSuzuki'
       await api.post(`/orders/distributor-action/${id}`, {
         decision,
         remarks: note || null,
-        amendedItems
+        amendedItems:
+          decision === 'SentBackForModification' || isManufacturerResubmit ? amendedItems() : null,
+        fulfillmentChoice: isManufacturerResubmit ? 'PassToPakSuzuki' : null,
+        pakSuzukiShipTo: null
+      })
+    },
+    onSuccess: async (_data, decision) => {
+      await qc.invalidateQueries({ queryKey: ['order-detail', id] })
+      await qc.invalidateQueries({ queryKey: ['orders-distributor-all'] })
+      navigate(decision === 'ForwardedToPakSuzuki' ? '/orders?section=manufacture' : '/orders?section=retailer')
+    },
+    onError: (e: unknown) => {
+      setError(extractError(e) || 'Could not update order.')
+    }
+  })
+
+  const staffAction = useMutation({
+    mutationFn: async (decision: StaffDecision) => {
+      await api.post(`/orders/paksuzuki-action/${id}`, {
+        decision,
+        remarks: note || null,
+        amendedItems:
+          decision === 'Cancelled' ? null : amendedItems()
       })
     },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['order-detail', id] })
-      await qc.invalidateQueries({ queryKey: ['orders-distributor-all'] })
-      navigate('/orders?section=retailer')
+      await qc.invalidateQueries({ queryKey: ['orders-page'] })
+      navigate(`/orders/${id}`)
     },
     onError: (e: unknown) => {
-      setError(
-        (e as { response?: { data?: { detail?: string; title?: string; message?: string } } })?.response?.data
-          ?.detail ||
-          (e as { response?: { data?: { title?: string } } })?.response?.data?.title ||
-          (e as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-          'Could not update order.'
-      )
+      setError(extractError(e) || 'Could not update order.')
     }
   })
+
+  const actionPending = distAction.isPending || staffAction.isPending
 
   const bump = (lineId: string, delta: number) => {
     setLines((prev) =>
@@ -161,59 +183,10 @@ export default function AmendOrderPage() {
     setLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, removed: true } : l)))
   }
 
-  const openPartialModal = () => {
-    setError(null)
-    const initial: Record<string, number> = {}
-    for (const l of visibleLines) {
-      initial[l.id] = Math.max(0, Math.floor(l.requestedQuantity / 2))
-    }
-    setPartialQty(initial)
-    setPartialOpen(true)
-  }
-
-  const submitPartial = () => {
-    const payload = visibleLines.map((l) => ({
-      orderItemId: l.id,
-      approvedQuantity: Math.min(l.requestedQuantity, Math.max(0, partialQty[l.id] ?? 0))
-    }))
-    const anyApproved = payload.some((p) => p.approvedQuantity > 0)
-    const allFull = visibleLines.every((l) => (partialQty[l.id] ?? 0) >= l.requestedQuantity)
-    if (!anyApproved) {
-      setError('Approve at least 1 unit from inventory.')
-      return
-    }
-    if (allFull) {
-      setError('All lines are at full quantity — use Confirm Order for full approval, or lower at least one line.')
-      return
-    }
-    setError(null)
-    setPartialOpen(false)
-    action.mutate({ decision: 'PartiallyApprovedByDistributor', amendedOverride: payload })
-  }
-
-  const orderToManufacturer = () => {
-    if (!order || !id) return
-    const cartLines: CartLine[] = visibleLines.map((l) => ({
-      productId: l.productId,
-      variantId: l.productVariantId || '',
-      sku: l.productSku,
-      name: l.productName,
-      description: l.productBio,
-      categoryName: l.categoryName,
-      imageUrl: l.primaryImageUrl,
-      packLabel: l.variantTypeName || l.requestedUnit,
-      unitPrice: l.unitPrice,
-      quantity: l.quantity,
-      unit: l.requestedUnit
-    }))
-    replaceFromRetailerOrder(cartLines, id)
-    navigate('/cart')
-  }
-
-  if (role !== 'Distributor') {
+  if (!isDistributor && !isStaff) {
     return (
       <div className="py-16 text-center text-sm text-suzuki-mute">
-        Only distributors can amend retailer orders.
+        You do not have permission to amend orders.
       </div>
     )
   }
@@ -222,10 +195,10 @@ export default function AmendOrderPage() {
     return <p className="text-sm text-suzuki-mute py-16 text-center">Loading order…</p>
   }
 
-  if (!order || order.source !== 'RetailerOrder') {
+  if (!order) {
     return (
       <div className="py-16 text-center space-y-3">
-        <p className="text-sm text-suzuki-mute">Amend is only available for retailer orders.</p>
+        <p className="text-sm text-suzuki-mute">Order not found.</p>
         <button type="button" onClick={() => navigate('/orders')} className="text-suzuki-blue font-semibold text-sm">
           Back to Orders
         </button>
@@ -233,10 +206,37 @@ export default function AmendOrderPage() {
     )
   }
 
-  if (order.status !== 'PendingDistributorApproval') {
+  if (isDistributor) {
+    const isRetailerPending =
+      order.source === 'RetailerOrder' &&
+      statusCode === 'PendingDistributorApproval' &&
+      !order.pakSuzukiActionedAtUtc
+    const isPakSuzukiAmendmentReview =
+      statusCode === 'PendingDistributorApproval' && !!order.pakSuzukiActionedAtUtc
+    if (!isRetailerPending && !isPakSuzukiAmendmentReview) {
+      return (
+        <div className="py-16 text-center space-y-3">
+          <p className="text-sm text-suzuki-mute">
+            This order cannot be amended right now. Open the order details if Pak Suzuki sent an amendment.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate(`/orders/${order.id}`)}
+            className="text-suzuki-blue font-semibold text-sm"
+          >
+            View Order Details
+          </button>
+        </div>
+      )
+    }
+  }
+
+  if (isStaff && statusCode !== 'PendingPakSuzukiApproval') {
     return (
       <div className="py-16 text-center space-y-3">
-        <p className="text-sm text-suzuki-mute">This order is no longer pending and cannot be amended.</p>
+        <p className="text-sm text-suzuki-mute">
+          Amend is only available while the order is pending Pak Suzuki approval.
+        </p>
         <button
           type="button"
           onClick={() => navigate(`/orders/${order.id}`)}
@@ -248,35 +248,21 @@ export default function AmendOrderPage() {
     )
   }
 
-  if (order.thresholdReached) {
-    return (
-      <div className="py-16 text-center space-y-3 max-w-lg mx-auto">
-        <div className="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700">
-          <AlertTriangle size={16} /> Ship-to-Party (threshold reached)
-        </div>
-        <p className="text-sm text-suzuki-mute">
-          This retailer is eligible for direct Pak Suzuki delivery. Use Confirm Order on Order Details to send it
-          to the manufacturer — Amend / Partial / Order to Manufacturer do not apply.
-        </p>
-        <button
-          type="button"
-          onClick={() => navigate(`/orders/${order.id}`)}
-          className="text-suzuki-blue font-semibold text-sm"
-        >
-          Back to Order Details
-        </button>
-      </div>
-    )
-  }
+  const isPakSuzukiAmendmentReview =
+    isDistributor && statusCode === 'PendingDistributorApproval' && !!order.pakSuzukiActionedAtUtc
 
   return (
     <div className="space-y-5 pb-8">
       <div className="flex flex-col lg:flex-row lg:items-start gap-3 justify-between">
-        <h1 className="text-2xl font-extrabold text-suzuki-navy">Amend Order Details</h1>
-        {order.thresholdReached && (
+        <h1 className="text-2xl font-extrabold text-suzuki-navy">
+          {isPakSuzukiAmendmentReview ? 'Review Pak Suzuki Amendment' : 'Amend Order Details'}
+        </h1>
+        {(order.thresholdMet ?? order.thresholdReached) && (
           <div className="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700">
             <AlertTriangle size={16} className="shrink-0" />
-            Threshold Reached And Will Be Shipped By Pak Suzuki.
+            {isStaff
+              ? 'Threshold met — adjust quantities before confirming or sending back.'
+              : 'Threshold met — after quantity changes you can fulfill this order or pass it to Pak Suzuki.'}
           </div>
         )}
       </div>
@@ -285,148 +271,116 @@ export default function AmendOrderPage() {
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
       )}
 
+      {order.pakSuzukiRemarks && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          <span className="font-extrabold">Pak Suzuki amendment note: </span>
+          {order.pakSuzukiRemarks}
+        </div>
+      )}
+
+      {order.retailerRemarks && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-suzuki-navy">
+          <span className="font-extrabold">Retailer note: </span>
+          {order.retailerRemarks}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4">
           <h2 className="text-xl font-extrabold text-suzuki-blue">Order Number: {order.orderNumber}</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Order Date" value={formatOrderDate(order.createdAtUtc)} />
-            <div>
-              <div className="text-xs font-bold text-suzuki-navy/80 mb-1">Order Status</div>
-              <span className="inline-flex rounded-full px-4 py-1.5 text-sm font-bold bg-amber-100 text-amber-800">
-                {uiStatus}
-              </span>
-            </div>
-          </div>
-          <div className="border-t border-suzuki-line pt-4 space-y-3">
-            <h3 className="font-bold text-suzuki-navy">Retailor Detail</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Retailor Name" value={order.retailerName || '—'} />
-              <Field label="Location" value={locationLine(order.regionName, order.retailerAddress)} />
-              <Field label="Address" value={order.retailerAddress || '—'} className="sm:col-span-2" />
-              <Field label="Contact Number" value={order.retailerMobile || '—'} />
-            </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Status" value={uiStatus} />
+            <Field label="Date" value={formatOrderDate(order.createdAtUtc)} />
+            <Field label="Distributor" value={order.distributorName || '—'} />
+            <Field label="Retailer" value={order.retailerName || '—'} />
+            <Field
+              label="Location"
+              value={locationLine(order.regionName, order.retailerAddress || order.distributorAddress)}
+              className="col-span-2"
+            />
           </div>
         </section>
 
-        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4">
-          <h3 className="font-bold text-suzuki-navy">Delivery Details</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Address" value={order.retailerAddress || '—'} className="sm:col-span-2" />
-            <Field label="Location" value={locationLine(order.regionName, order.retailerAddress)} />
-            <Field label="Retailor Name" value={order.retailerName || '—'} />
-            <Field label="Contact Number" value={order.retailerMobile || '—'} />
-          </div>
-          <div>
-            <h3 className="font-bold text-suzuki-navy mb-2">Payment Status</h3>
-            <div
-              className={clsx(
-                'w-full rounded-xl text-center py-2.5 text-sm font-bold',
-                pay === 'Received' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'
-              )}
+        <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-extrabold text-suzuki-navy">Line items</h2>
+            <button
+              type="button"
+              onClick={() => {
+                downloadExcel(
+                  `amend-${order.orderNumber}`,
+                  [
+                    { header: 'SKU', value: (l: AmendLine) => l.productSku },
+                    { header: 'Product', value: (l: AmendLine) => l.productName },
+                    { header: 'Qty', value: (l: AmendLine) => l.quantity },
+                    { header: 'Unit price', value: (l: AmendLine) => l.unitPrice }
+                  ],
+                  visibleLines
+                )
+              }}
+              className="inline-flex items-center gap-1.5 text-sm font-bold text-suzuki-blue"
             >
-              {pay === 'Received' ? 'Recieved' : pay}
-            </div>
+              <FileSpreadsheet size={14} /> Export
+            </button>
+          </div>
+
+          <div className="space-y-3 max-h-[28rem] overflow-y-auto pr-1">
+            {visibleLines.map((l) => (
+              <div key={l.id} className="rounded-xl border border-suzuki-line p-3 flex gap-3">
+                <div className="h-14 w-14 rounded-lg bg-suzuki-mist overflow-hidden flex items-center justify-center shrink-0">
+                  {l.primaryImageUrl ? (
+                    <img src={l.primaryImageUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <ImageIcon size={18} className="text-suzuki-mute" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-suzuki-navy text-sm truncate">{l.productName}</div>
+                  <div className="text-xs text-suzuki-mute">{l.productSku} · {l.requestedUnit}</div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => bump(l.id, -1)}
+                      className="h-8 w-8 rounded-lg border border-suzuki-line flex items-center justify-center"
+                    >
+                      <Minus size={14} />
+                    </button>
+                    <span className="min-w-[2rem] text-center font-extrabold text-suzuki-navy">{l.quantity}</span>
+                    <button
+                      type="button"
+                      onClick={() => bump(l.id, 1)}
+                      className="h-8 w-8 rounded-lg border border-suzuki-line flex items-center justify-center"
+                    >
+                      <Plus size={14} />
+                    </button>
+                    <span className="ml-auto text-sm font-semibold text-suzuki-navy">
+                      {formatRs(l.unitPrice * l.quantity)}
+                    </span>
+                    <button
+                      type="button"
+                      title="Remove line"
+                      onClick={() => removeLine(l.id)}
+                      className="p-1.5 rounded-lg text-suzuki-red hover:bg-rose-50"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="border-t border-suzuki-line pt-3 text-sm space-y-1">
+            <div className="flex justify-between"><span className="text-suzuki-mute">Subtotal</span><span className="font-semibold">{formatRs(totals.subtotal)}</span></div>
+            <div className="flex justify-between"><span className="text-suzuki-mute">GST ({totals.gstPercent}%)</span><span className="font-semibold">{formatRs(totals.gst)}</span></div>
+            <div className="flex justify-between font-extrabold text-suzuki-navy"><span>Total</span><span>{formatRs(totals.total)}</span></div>
           </div>
         </section>
       </div>
 
-      <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-5">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-lg font-extrabold text-suzuki-navy">Order Summary</h3>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-blue/40 text-suzuki-blue px-3 py-2 text-xs font-semibold hover:bg-suzuki-ice"
-          >
-            <FileSpreadsheet size={14} /> Export Excel
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          {visibleLines.map((item) => (
-            <div
-              key={item.id}
-              className="flex flex-col sm:flex-row sm:items-center gap-4 rounded-xl border border-suzuki-line/80 bg-suzuki-mist/30 p-3"
-            >
-              <div className="h-20 w-20 rounded-lg bg-white border border-suzuki-line flex items-center justify-center overflow-hidden shrink-0">
-                {item.primaryImageUrl ? (
-                  <img src={item.primaryImageUrl} alt="" className="h-full w-full object-contain" />
-                ) : (
-                  <ImageIcon className="text-suzuki-mute" size={28} />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="font-bold text-suzuki-navy leading-snug">{item.productName}</div>
-                {item.productBio && <div className="text-xs text-suzuki-mute mt-0.5">{item.productBio}</div>}
-                <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-                  <span>
-                    Selected Pack:{' '}
-                    <span className="font-bold text-suzuki-red">
-                      {item.variantTypeName || item.requestedUnit}
-                    </span>
-                  </span>
-                  <span className="inline-flex items-center gap-2">
-                    Unit:
-                    <span className="inline-flex items-center rounded-lg border border-suzuki-line bg-white">
-                      <button
-                        type="button"
-                        onClick={() => bump(item.id, -1)}
-                        className="px-2 py-1.5 text-suzuki-navy hover:bg-suzuki-mist"
-                        aria-label="Decrease"
-                      >
-                        <Minus size={14} />
-                      </button>
-                      <span className="min-w-[2.5rem] text-center font-bold text-suzuki-red">{item.quantity}</span>
-                      <button
-                        type="button"
-                        onClick={() => bump(item.id, 1)}
-                        className="px-2 py-1.5 text-suzuki-navy hover:bg-suzuki-mist"
-                        aria-label="Increase"
-                      >
-                        <Plus size={14} />
-                      </button>
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 shrink-0 sm:flex-col sm:items-end">
-                <div className="text-lg font-extrabold text-suzuki-blue">
-                  {formatRs(item.unitPrice * item.quantity)}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeLine(item.id)}
-                  className="p-2 rounded-lg text-rose-600 hover:bg-rose-50"
-                  title="Remove line"
-                  disabled={visibleLines.length <= 1}
-                >
-                  <Trash2 size={18} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="flex flex-col lg:flex-row lg:items-end gap-4 justify-between border-t border-suzuki-line pt-4">
-          <div>
-            <div className="text-sm font-bold text-suzuki-navy mb-2">Order Status</div>
-            <span className="inline-flex rounded-full px-4 py-1.5 text-sm font-bold bg-amber-100 text-amber-800">
-              Pending
-            </span>
-          </div>
-          <div className="text-right space-y-1 min-w-[200px]">
-            <div className="text-sm">
-              <span className="text-suzuki-mute">Subtotal: </span>
-              <span className="font-bold text-suzuki-red">{formatRs(totals.subtotal)}</span>
-            </div>
-            <div className="text-sm text-suzuki-mute">GST TAX: {totals.gstPercent}%</div>
-            <div className="text-lg font-extrabold text-suzuki-red">
-              Total Amount: {formatRs(totals.total)}
-            </div>
-          </div>
-        </div>
-
+      <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4">
         <div>
-          <label className="block text-sm font-bold text-suzuki-navy mb-1.5">Note for Order</label>
+          <label className="block text-sm font-bold text-suzuki-navy mb-1.5">Note</label>
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
@@ -437,153 +391,114 @@ export default function AmendOrderPage() {
         </div>
 
         <div className="flex flex-col gap-3">
-          <p className="text-xs text-suzuki-mute">
-            Partial approve: choose how many units you can fulfill from inventory. Order to manufacturer opens
-            cart as a normal Pak Suzuki order (linked to this retailer order).
-          </p>
-          <div className="flex flex-col sm:flex-row flex-wrap justify-end gap-3">
-            <button
-              type="button"
-              disabled={action.isPending}
-              onClick={() => {
-                setError(null)
-                action.mutate({ decision: 'RejectedByDistributor' })
-              }}
-              className="rounded-xl bg-sky-100 text-suzuki-navy font-extrabold px-6 py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
-            >
-              CANCELED
-            </button>
-            <button
-              type="button"
-              disabled={action.isPending || visibleLines.length === 0}
-              onClick={orderToManufacturer}
-              className="rounded-xl border border-suzuki-navy text-suzuki-navy font-extrabold px-6 py-3 tracking-wide hover:bg-suzuki-mist disabled:opacity-50"
-            >
-              ORDER TO MANUFACTURER
-            </button>
-            <button
-              type="button"
-              disabled={action.isPending || visibleLines.length === 0}
-              onClick={openPartialModal}
-              className="rounded-xl bg-amber-500 text-white font-extrabold px-6 py-3 tracking-wide hover:bg-amber-600 disabled:opacity-50"
-            >
-              APPROVE PARTIAL (INVENTORY)
-            </button>
-            <button
-              type="button"
-              disabled={action.isPending || visibleLines.length === 0}
-              onClick={() => {
-                setError(null)
-                action.mutate({ decision: 'SentBackForModification' })
-              }}
-              className="rounded-xl bg-suzuki-red text-white font-extrabold px-6 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
-            >
-              SEND AMENDMENTS TO RETAILOR
-            </button>
-          </div>
+          {isDistributor ? (
+            isPakSuzukiAmendmentReview ? (
+              <>
+                <p className="text-xs text-suzuki-mute">
+                  Super Admin amended this order. Approve the new quantities, or change them further, then send back to Pak Suzuki — same as when a retailer responds to your amendment.
+                </p>
+                <div className="flex flex-col sm:flex-row flex-wrap justify-end gap-3">
+                  <button
+                    type="button"
+                    disabled={actionPending}
+                    onClick={() => navigate(`/orders/${order.id}`)}
+                    className="rounded-xl bg-sky-100 text-suzuki-navy font-extrabold px-6 py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
+                  >
+                    BACK TO ORDER
+                  </button>
+                  <button
+                    type="button"
+                    disabled={actionPending || visibleLines.length === 0}
+                    onClick={() => {
+                      if (!window.confirm('Approve these quantities and send back to Pak Suzuki?')) return
+                      setError(null)
+                      distAction.mutate('ForwardedToPakSuzuki')
+                    }}
+                    className="rounded-xl bg-suzuki-red text-white font-extrabold px-6 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
+                  >
+                    APPROVE & SEND TO PAK SUZUKI
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-suzuki-mute">
+                  Change pack quantities and send the order back so the retailer can update it. Reject also sends the order back for modification.
+                </p>
+                <div className="flex flex-col sm:flex-row flex-wrap justify-end gap-3">
+                  <button
+                    type="button"
+                    disabled={actionPending}
+                    onClick={() => {
+                      if (!window.confirm('Reject this order and send it back to the retailer?')) return
+                      setError(null)
+                      distAction.mutate('RejectedByDistributor')
+                    }}
+                    className="rounded-xl bg-sky-100 text-suzuki-navy font-extrabold px-6 py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
+                  >
+                    REJECT / SEND BACK
+                  </button>
+                  <button
+                    type="button"
+                    disabled={actionPending || visibleLines.length === 0}
+                    onClick={() => {
+                      if (!window.confirm('Send amended quantities back to the retailer?')) return
+                      setError(null)
+                      distAction.mutate('SentBackForModification')
+                    }}
+                    className="rounded-xl bg-suzuki-red text-white font-extrabold px-6 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
+                  >
+                    SEND AMENDMENTS TO RETAILER
+                  </button>
+                </div>
+              </>
+            )
+          ) : (
+            <>
+              <p className="text-xs text-suzuki-mute">
+                Change pack quantities and send them to the distributor for approval (same as distributor → retailer amendment).
+              </p>
+              <div className="flex flex-col sm:flex-row flex-wrap justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={actionPending}
+                  onClick={() => {
+                    if (!window.confirm('Cancel / reject this manufacturer order?')) return
+                    setError(null)
+                    staffAction.mutate('Cancelled')
+                  }}
+                  className="rounded-xl bg-sky-100 text-suzuki-navy font-extrabold px-6 py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
+                >
+                  CANCEL ORDER
+                </button>
+                <button
+                  type="button"
+                  disabled={actionPending || visibleLines.length === 0}
+                  onClick={() => {
+                    if (!window.confirm('Send amended quantities to the distributor for approval?')) return
+                    setError(null)
+                    staffAction.mutate('PendingDistributorApproval')
+                  }}
+                  className="rounded-xl bg-suzuki-red text-white font-extrabold px-6 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
+                >
+                  SEND AMENDMENTS TO DISTRIBUTOR
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </section>
-
-      {partialOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-          <div className="w-full max-w-lg bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-extrabold text-suzuki-navy">Approve Partial from Inventory</h3>
-                <p className="text-xs text-suzuki-mute mt-1">
-                  Enter how many units you can fulfill (e.g. requested 20, approve 10). Must be less than
-                  requested on at least one line.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPartialOpen(false)}
-                className="p-1.5 rounded-lg text-suzuki-mute hover:bg-suzuki-mist"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="space-y-3 max-h-[50vh] overflow-y-auto">
-              {visibleLines.map((l) => (
-                <div key={l.id} className="rounded-xl border border-suzuki-line p-3 space-y-2">
-                  <div className="font-bold text-suzuki-navy text-sm">{l.productName}</div>
-                  <div className="text-xs text-suzuki-mute">
-                    Requested: <span className="font-bold text-suzuki-red">{l.requestedQuantity}</span>
-                    {' · '}
-                    Pack: {l.variantTypeName || l.requestedUnit}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-suzuki-navy">Approve:</span>
-                    <span className="inline-flex items-center rounded-lg border border-suzuki-line bg-white">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPartialQty((prev) => ({
-                            ...prev,
-                            [l.id]: Math.max(0, (prev[l.id] ?? 0) - 1)
-                          }))
-                        }
-                        className="px-2 py-1.5 text-suzuki-navy hover:bg-suzuki-mist"
-                      >
-                        <Minus size={14} />
-                      </button>
-                      <input
-                        type="number"
-                        min={0}
-                        max={l.requestedQuantity}
-                        value={partialQty[l.id] ?? 0}
-                        onChange={(e) => {
-                          const n = Number(e.target.value)
-                          setPartialQty((prev) => ({
-                            ...prev,
-                            [l.id]: Number.isFinite(n)
-                              ? Math.min(l.requestedQuantity, Math.max(0, n))
-                              : 0
-                          }))
-                        }}
-                        className="w-16 text-center font-bold text-suzuki-red outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPartialQty((prev) => ({
-                            ...prev,
-                            [l.id]: Math.min(l.requestedQuantity, (prev[l.id] ?? 0) + 1)
-                          }))
-                        }
-                        className="px-2 py-1.5 text-suzuki-navy hover:bg-suzuki-mist"
-                      >
-                        <Plus size={14} />
-                      </button>
-                    </span>
-                    <span className="text-xs text-suzuki-mute">of {l.requestedQuantity}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-3 justify-end pt-1">
-              <button
-                type="button"
-                onClick={() => setPartialOpen(false)}
-                className="rounded-xl bg-sky-100 text-suzuki-navy font-extrabold px-6 py-3"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={action.isPending}
-                onClick={submitPartial}
-                className="rounded-xl bg-amber-500 text-white font-extrabold px-6 py-3 hover:bg-amber-600 disabled:opacity-50"
-              >
-                Confirm Partial Approve
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
+  )
+}
+
+function extractError(e: unknown) {
+  return (
+    (e as { response?: { data?: { detail?: string; title?: string; message?: string } } })?.response?.data
+      ?.detail ||
+    (e as { response?: { data?: { title?: string } } })?.response?.data?.title ||
+    (e as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+    null
   )
 }
 

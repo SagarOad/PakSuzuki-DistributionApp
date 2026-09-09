@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Camera, Plus, Trash2, Truck } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import {
-  SHOP_CATEGORIES,
+  DEFAULT_BANNER_CATEGORIES,
   emptyVariant,
   num,
   uploadShopMedia,
@@ -56,7 +56,7 @@ export default function ProductDetailsPage() {
   const [name, setName] = useState('')
   const [bio, setBio] = useState('')
   const [description, setDescription] = useState('')
-  const [categoryName, setCategoryName] = useState<string>(SHOP_CATEGORIES[2])
+  const [categoryName, setCategoryName] = useState<string>(DEFAULT_BANNER_CATEGORIES[0])
   const [primaryImageUrl, setPrimaryImageUrl] = useState('')
   const [primaryPreview, setPrimaryPreview] = useState<string | null>(null)
   const [pendingPrimary, setPendingPrimary] = useState<File | null>(null)
@@ -80,7 +80,7 @@ export default function ProductDetailsPage() {
     setName(d.name)
     setBio(d.bio ?? '')
     setDescription(d.description ?? '')
-    setCategoryName(d.categoryName || SHOP_CATEGORIES[2])
+    setCategoryName(d.categoryName || DEFAULT_BANNER_CATEGORIES[0])
     setPrimaryImageUrl(d.primaryImageUrl ?? '')
     setSectionUrls(d.sectionImageUrls ?? [])
     setVariants(
@@ -94,7 +94,7 @@ export default function ProductDetailsPage() {
             costPrice: v.costPrice,
             gstPercent: v.gstPercent,
             fedPercent: v.fedPercent,
-            whtPercent: v.whtPercent,
+            whtPercent: 0,
             profitAmount: v.profitAmount,
             inStock: v.inStock,
             isPublished: v.isPublished
@@ -140,7 +140,7 @@ export default function ProductDetailsPage() {
           costPrice: num(v.costPrice),
           gstPercent: num(v.gstPercent),
           fedPercent: num(v.fedPercent),
-          whtPercent: num(v.whtPercent),
+          whtPercent: 0,
           profitAmount: num(v.profitAmount),
           inStock: v.inStock,
           isPublished: v.isPublished,
@@ -211,7 +211,7 @@ export default function ProductDetailsPage() {
               </Field>
               <Field label="Categories">
                 <select value={categoryName} onChange={(e) => setCategoryName(e.target.value)} className="field">
-                  {SHOP_CATEGORIES.map((c) => (
+                  {DEFAULT_BANNER_CATEGORIES.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
@@ -475,17 +475,17 @@ function VariantFields({
 
       <div>
         <p className="text-xs font-bold text-suzuki-mute uppercase tracking-wide mb-2">Taxes</p>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="GST">
             <input type="number" value={variant.gstPercent} onChange={(e) => set({ gstPercent: e.target.value === '' ? '' : Number(e.target.value) })} className="field" />
           </Field>
           <Field label="FED">
             <input type="number" value={variant.fedPercent} onChange={(e) => set({ fedPercent: e.target.value === '' ? '' : Number(e.target.value) })} className="field" />
           </Field>
-          <Field label="WHT">
-            <input type="number" value={variant.whtPercent} onChange={(e) => set({ whtPercent: e.target.value === '' ? '' : Number(e.target.value) })} className="field" />
-          </Field>
         </div>
+        <p className="mt-2 text-xs text-suzuki-mute">
+          WHT (Advance Income Tax) is set once for all orders in Settings — not per product.
+        </p>
       </div>
 
       <div>

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Download } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { OrderTable, ExportExcelButton, DateFilterField, FilterSelect } from '@/components/ui/DataTable'
+import { downloadExcel, fetchAllFromApi, inDateRange } from '@/utils/excelExport'
 
 interface ReportRow {
   id: string
@@ -9,14 +10,15 @@ interface ReportRow {
   date: string
   lastUpdate: string
   endpoint?: string
+  kind: 'orders' | 'products' | 'incentives' | 'claims'
 }
 
 const CATALOG: ReportRow[] = [
-  { id: 'distributor-sales', title: 'Distributor Sales Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/orders' },
-  { id: 'retailer-orders', title: 'Retailer Orders Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/orders' },
-  { id: 'product-sales', title: 'Product-Wise Sales Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/products' },
-  { id: 'target-achievement', title: 'Target Vs Achievement Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/incentives' },
-  { id: 'claims', title: 'Claims Summary Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/claims' }
+  { id: 'distributor-sales', title: 'Distributor Sales Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/orders', kind: 'orders' },
+  { id: 'retailer-orders', title: 'Retailer Orders Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/orders', kind: 'orders' },
+  { id: 'product-sales', title: 'Product-Wise Sales Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/products', kind: 'products' },
+  { id: 'target-achievement', title: 'Target Vs Achievement Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/incentives', kind: 'incentives' },
+  { id: 'claims', title: 'Claims Summary Report', date: '10-09-2025', lastUpdate: '10-09-2025', endpoint: '/claims', kind: 'claims' }
 ]
 
 export default function ReportsPage() {
@@ -25,37 +27,86 @@ export default function ReportsPage() {
   const [filter, setFilter] = useState('all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
+  const [exportingId, setExportingId] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
     let rows = CATALOG
+    if (filter === 'sales') rows = rows.filter((r) => r.kind === 'orders' || r.kind === 'products')
+    if (filter === 'orders') rows = rows.filter((r) => r.kind === 'orders')
     if (search.trim()) {
       const q = search.toLowerCase()
       rows = rows.filter((r) => r.title.toLowerCase().includes(q))
     }
     return rows
-  }, [search])
+  }, [search, filter])
 
   const pageSize = 10
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize)
 
-  const downloadCsv = async (row: ReportRow) => {
+  const downloadReport = async (row: ReportRow) => {
+    if (!row.endpoint) return
+    setExportingId(row.id)
     try {
-      if (row.endpoint) {
-        const { data } = await api.get(row.endpoint, { params: { pageSize: 100, from: fromDate || undefined, to: toDate || undefined } })
-        const items = data.items ?? data ?? []
-        const keys = items[0] ? Object.keys(items[0]) : ['message']
-        const lines = [
-          keys.join(','),
-          ...items.map((it: Record<string, unknown>) =>
-            keys.map((k) => JSON.stringify(it[k] ?? '')).join(',')
-          )
-        ]
-        if (items.length === 0) lines.push('"No rows for this report"')
-        triggerDownload(lines.join('\n'), `${row.id}.csv`)
+      if (row.kind === 'orders') {
+        const items = await fetchAllFromApi<Record<string, unknown>>(row.endpoint, {})
+        const dated = items.filter((it) =>
+          inDateRange(String(it.createdAtUtc ?? ''), fromDate, toDate)
+        )
+        downloadExcel(
+          row.id,
+          [
+            { header: 'Order Date', value: (o) => String(o.createdAtUtc ?? '').slice(0, 10) },
+            { header: 'Order Number', value: (o) => String(o.orderNumber ?? '') },
+            { header: 'Retailer', value: (o) => String(o.retailerName ?? '') },
+            { header: 'Distributor', value: (o) => String(o.distributorName ?? '') },
+            { header: 'Status', value: (o) => String(o.status ?? '') },
+            { header: 'Total (PKR)', value: (o) => Number(o.grandTotal ?? 0) }
+          ],
+          dated
+        )
+        return
       }
+
+      if (row.kind === 'claims') {
+        const items = await fetchAllFromApi<Record<string, unknown>>(row.endpoint, {
+          from: fromDate || undefined,
+          to: toDate || undefined
+        })
+        downloadExcel(
+          row.id,
+          [
+            { header: 'Claims Date', value: (c) => String(c.createdAtUtc ?? '').slice(0, 10) },
+            { header: 'Order Number', value: (c) => String(c.orderNumber ?? '') },
+            { header: 'Distributor', value: (c) => String(c.distributorName ?? '') },
+            { header: 'Status', value: (c) => String(c.status ?? '') }
+          ],
+          items
+        )
+        return
+      }
+
+      const { data } = await api.get(row.endpoint, {
+        params: { pageSize: 500, pageNumber: 1, from: fromDate || undefined, to: toDate || undefined }
+      })
+      const items: Record<string, unknown>[] = data.items ?? data ?? []
+      if (items.length === 0) {
+        downloadExcel(row.id, [{ header: 'Message', value: () => 'No rows for this report' }], [{}])
+        return
+      }
+      const keys = Object.keys(items[0])
+      downloadExcel(
+        row.id,
+        keys.map((k) => ({ header: k, value: (r: Record<string, unknown>) => r[k] as string | number })),
+        items
+      )
     } catch {
-      triggerDownload(`title,note\n"${row.title}","Export failed — try again later"\n`, `${row.id}.csv`)
+      downloadExcel(row.id, [
+        { header: 'Title', value: () => row.title },
+        { header: 'Note', value: () => 'Export failed — try again later' }
+      ], [{}])
+    } finally {
+      setExportingId(null)
     }
   }
 
@@ -85,16 +136,10 @@ export default function ReportsPage() {
           </>
         }
         toolbarActions={
-          <div className="flex flex-wrap gap-2">
-            <ExportExcelButton onClick={() => pageItems[0] && void downloadCsv(pageItems[0])} />
-            <button
-              type="button"
-              className="inline-flex items-center justify-center gap-1.5 rounded-[10px] border-[1.5px] border-[#005BAC] bg-white text-[#005BAC] px-4 py-2.5 text-sm font-bold hover:bg-[#F0F7FC]"
-              onClick={() => pageItems[0] && void downloadCsv(pageItems[0])}
-            >
-              <Download size={15} /> Export PDF
-            </button>
-          </div>
+          <ExportExcelButton
+            loading={exportingId === pageItems[0]?.id}
+            onClick={() => pageItems[0] && void downloadReport(pageItems[0])}
+          />
         }
         columns={[
           { key: 'title', header: 'Title', wide: true },
@@ -119,9 +164,10 @@ export default function ReportsPage() {
             <td className="pl-3 pr-4 py-3.5 text-right">
               <button
                 type="button"
-                onClick={() => void downloadCsv(r)}
-                className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
-                title="Download"
+                disabled={exportingId === r.id}
+                onClick={() => void downloadReport(r)}
+                className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice disabled:opacity-50"
+                title="Download Excel"
               >
                 <Download size={16} />
               </button>
@@ -131,14 +177,4 @@ export default function ReportsPage() {
       </OrderTable>
     </div>
   )
-}
-
-function triggerDownload(content: string, filename: string) {
-  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
 }

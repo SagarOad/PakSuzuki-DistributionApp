@@ -264,6 +264,10 @@ namespace PakSuzuki.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("ProfileImageUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<Guid>("RegionId")
                         .HasColumnType("uniqueidentifier");
 
@@ -447,6 +451,10 @@ namespace PakSuzuki.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid?>("RetailerId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("RetailerRemarks")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
 
                     b.Property<string>("SapDeliveryNumber")
                         .HasColumnType("nvarchar(max)");
@@ -967,6 +975,10 @@ namespace PakSuzuki.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("ProfileImageUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<string>("RetailerCode")
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
@@ -1092,6 +1104,9 @@ namespace PakSuzuki.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LastLoginAtUtc")
+                        .HasColumnType("datetime2");
 
                     b.Property<bool>("LockoutEnabled")
                         .HasColumnType("bit");

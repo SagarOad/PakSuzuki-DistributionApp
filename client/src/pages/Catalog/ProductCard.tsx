@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
-import { formatPrice, ProductTitle, type CatalogProductCard } from './catalogTypes'
+import { formatPrice, packSummary, ProductTitle, type CatalogProductCard } from './catalogTypes'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
 
 interface Props {
   product: CatalogProductCard
@@ -8,45 +9,62 @@ interface Props {
 }
 
 export function ProductCard({ product, onAddToCart, onBuyNow }: Props) {
+  const pack = packSummary(product)
+  const unit = product.unitLabel
+  const pieces = product.packQuantity
+
   return (
-    <article className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden flex flex-col">
-      <Link to={`/catalog/products/${product.id}`} className="block aspect-[4/3] bg-gradient-to-b from-slate-100 to-slate-50 p-4">
-        {product.primaryImageUrl ? (
-          <img src={product.primaryImageUrl} alt={product.name} className="h-full w-full object-contain" />
-        ) : (
-          <div className="h-full w-full flex items-center justify-center text-xs font-semibold text-suzuki-mute">
-            No image
-          </div>
-        )}
+    <article className="bg-white rounded-xl border border-suzuki-line shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col h-full">
+      <Link
+        to={`/catalog/products/${product.id}`}
+        className="block aspect-[5/3] bg-gradient-to-b from-slate-50 to-white border-b border-suzuki-line"
+      >
+        <PlaceholderImage
+          src={product.primaryImageUrl}
+          alt={product.name}
+          className="h-full w-full"
+          imgClassName="h-full w-full object-contain p-3"
+        />
       </Link>
 
-      <div className="p-4 flex flex-col gap-2 flex-1">
+      <div className="p-3 flex flex-col gap-1.5 flex-1">
         <Link to={`/catalog/products/${product.id}`}>
-          <h3 className="text-base font-extrabold text-suzuki-navy leading-snug">
+          <h3 className="text-sm font-bold text-suzuki-navy leading-snug line-clamp-2">
             <ProductTitle name={product.name} />
           </h3>
         </Link>
-        <p className="text-sm text-suzuki-navy/80 line-clamp-2">
-          {product.description || 'Engine Oil'}
-        </p>
-        <p className="text-sm text-suzuki-mute">
-          Category: {product.categoryName || product.category}{' '}
-          <span className="text-suzuki-mute">|</span>{' '}
-          <span className="text-suzuki-red font-bold">{formatPrice(product.displayPrice)}/Piece</span>
+
+        <p className="text-xs text-suzuki-mute line-clamp-1">
+          {product.categoryName || product.category}
+          {unit ? ` · ${unit}` : ''}
         </p>
 
-        <div className="mt-auto pt-3 grid grid-cols-2 gap-2">
+        {pieces != null && pieces > 0 && (
+          <p className="text-[11px] text-suzuki-mute">
+            Pack: <span className="font-semibold text-suzuki-navy">{pieces} pcs</span>
+            {unit ? <span> × {unit}</span> : null}
+          </p>
+        )}
+
+        <div className="mt-1">
+          <p className="text-sm font-extrabold text-suzuki-red">{formatPrice(product.displayPrice)}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-suzuki-mute">
+            Per pack{pack ? ` · ${pack}` : ''}
+          </p>
+        </div>
+
+        <div className="mt-auto pt-2 grid grid-cols-2 gap-1.5">
           <button
             type="button"
             onClick={onAddToCart}
-            className="rounded-lg bg-sky-100 text-suzuki-navy text-xs font-extrabold tracking-wide py-2.5 hover:bg-sky-200 transition-colors"
+            className="rounded-md bg-sky-50 text-suzuki-navy text-[11px] font-bold tracking-wide py-2 hover:bg-sky-100 transition-colors"
           >
             ADD TO CART
           </button>
           <button
             type="button"
             onClick={onBuyNow}
-            className="rounded-lg bg-suzuki-red text-white text-xs font-extrabold tracking-wide py-2.5 hover:bg-red-700 transition-colors"
+            className="rounded-md bg-suzuki-red text-white text-[11px] font-bold tracking-wide py-2 hover:bg-red-700 transition-colors"
           >
             BUY NOW
           </button>

@@ -21,6 +21,9 @@ public class Distributor : EntityWithDomainEvents
     public double Latitude { get; set; }
     public double Longitude { get; set; }
 
+    /// <summary>Optional profile / avatar photo URL (stored under wwwroot/uploads).</summary>
+    public string? ProfileImageUrl { get; set; }
+
     public Guid RegionId { get; set; }
     public Region Region { get; set; } = default!;
 
@@ -30,6 +33,11 @@ public class Distributor : EntityWithDomainEvents
     public Guid? ApprovedByUserId { get; set; } // Super Admin (PSMCL) final approval
 
     public bool IsActive { get; set; } = true;
+
+    /// <summary>SAP dealer / BP code used in parts_order.sap_dealer_code.</summary>
+    public string? SapDealerCode { get; set; }
+    /// <summary>SAP ship-to party code when different from dealer code.</summary>
+    public string? SapShipToCode { get; set; }
 
     public ICollection<BusinessImage> BusinessImages { get; set; } = new List<BusinessImage>();
     public ICollection<Retailer> Retailers { get; set; } = new List<Retailer>();

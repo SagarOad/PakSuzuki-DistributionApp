@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Eye, Trash2, Check, X, RefreshCcw, Package, UserPlus } from 'lucide-react'
+import { Eye, Trash2, Check, X, RefreshCcw, Package, UserPlus, Power } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
 import { StatCard, StatCardRow } from '@/components/ui/StatCard'
@@ -13,6 +13,8 @@ import {
   DateFilterField
 } from '@/components/ui/DataTable'
 import { RequestActionButton, SendForCorrectionModal } from '@/components/ui/SendForCorrectionModal'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
+import { downloadExcel, fetchAllFromApi, inDateRange, exportFailed } from '@/utils/excelExport'
 import clsx from 'clsx'
 
 interface RetailerRow {
@@ -27,7 +29,9 @@ interface RetailerRow {
   distributorApprovalStatus: string
   superAdminApprovalStatus: string
   isActive?: boolean
+  isBlocked?: boolean
   createdAtUtc: string
+  profileImageUrl?: string | null
 }
 
 interface RetailerDetail {
@@ -67,6 +71,7 @@ export default function RetailersPage() {
   const [toDate, setToDate] = useState('')
   const [correctionId, setCorrectionId] = useState<string | null>(null)
   const [correctionRemarks, setCorrectionRemarks] = useState('')
+  const [exporting, setExporting] = useState(false)
 
   const setTab = (next: Tab) => {
     setPage(1)
@@ -121,6 +126,26 @@ export default function RetailersPage() {
     }
   })
 
+  const removeRetailer = useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/retailers/${id}`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['retailers-list'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-superadmin'] })
+    }
+  })
+
+  const reactivateRetailer = useMutation({
+    mutationFn: async (id: string) => {
+      await api.patch(`/retailers/activate/${id}`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['retailers-list'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-superadmin'] })
+    }
+  })
+
   const rows = tab === 'list' ? listQuery.data : pendingQuery.data
   const loading = tab === 'list' ? listQuery.isLoading : pendingQuery.isLoading
   const queryError = tab === 'list' ? listQuery.isError : pendingQuery.isError
@@ -155,6 +180,50 @@ export default function RetailersPage() {
     return `Showing ${String(start).padStart(2, '0')} to ${String(end).padStart(2, '0')} of ${rows.totalCount} entries`
   }, [rows])
 
+  function applyLocalFilters(items: RetailerRow[]) {
+    let next = items
+    if (statusFilter === 'active') {
+      next = next.filter((r) => r.isActive && r.superAdminApprovalStatus === 'Approved')
+    } else if (statusFilter === 'pending') {
+      next = next.filter(
+        (r) =>
+          r.distributorApprovalStatus === 'PendingReview' ||
+          r.superAdminApprovalStatus === 'PendingReview'
+      )
+    }
+    return next.filter((r) => inDateRange(r.createdAtUtc, fromDate, toDate))
+  }
+
+  async function exportRetailers() {
+    setExporting(true)
+    try {
+      const path = tab === 'list' ? '/retailers' : '/retailers/pending'
+      const all = await fetchAllFromApi<RetailerRow>(path, {
+        search: tab === 'list' ? (search || undefined) : undefined
+      })
+      const rowsToExport = applyLocalFilters(all)
+      downloadExcel(
+        `retailers-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
+        [
+          { header: 'Retailer Name', value: (r) => r.name },
+          { header: 'Contact Number', value: (r) => r.mobileNumber },
+          { header: 'Email', value: (r) => r.email },
+          { header: 'Distributor', value: (r) => r.distributorName },
+          { header: 'Address', value: (r) => r.businessAddress },
+          { header: 'Business Name', value: (r) => r.businessName },
+          { header: 'Distributor Approval', value: (r) => r.distributorApprovalStatus },
+          { header: 'Super Admin Approval', value: (r) => r.superAdminApprovalStatus },
+          { header: 'Created', value: (r) => r.createdAtUtc?.slice(0, 10) ?? '' }
+        ],
+        rowsToExport
+      )
+    } catch (err) {
+      exportFailed(err)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (!canManage) {
     return (
       <div className="bg-white rounded-2xl border border-suzuki-line p-8 text-center text-suzuki-mute">
@@ -164,6 +233,7 @@ export default function RetailersPage() {
   }
 
   function pipelineStatus(r: RetailerRow) {
+    if (r.superAdminApprovalStatus === 'Approved' && (r.isBlocked || !r.isActive)) return 'Deactivated'
     if (r.isActive && r.superAdminApprovalStatus === 'Approved') return 'Active'
     if (r.distributorApprovalStatus === 'Rejected') return 'Rejected by Distributor'
     if (r.superAdminApprovalStatus === 'Rejected') return 'Rejected'
@@ -259,12 +329,12 @@ export default function RetailersPage() {
                 ]}
               />
               <span className="text-sm font-semibold text-[#0B2E59]">From</span>
-              <DateFilterField value={fromDate} onChange={setFromDate} />
+              <DateFilterField value={fromDate} onChange={(v) => { setFromDate(v); setPage(1) }} />
               <span className="text-sm font-semibold text-[#0B2E59]">To</span>
-              <DateFilterField value={toDate} onChange={setToDate} />
+              <DateFilterField value={toDate} onChange={(v) => { setToDate(v); setPage(1) }} />
             </>
           }
-          toolbarActions={<ExportExcelButton />}
+          toolbarActions={<ExportExcelButton onClick={() => void exportRetailers()} loading={exporting} />}
           columns={[
             { key: 'name', header: 'Retailer Name', wide: true },
             { key: 'contact', header: 'Contact Number' },
@@ -288,7 +358,17 @@ export default function RetailersPage() {
             const showApprove = tab === 'requests' && (canStaffApprove(r) || canDistributorApprove(r))
             return (
               <tr key={r.id} className="border-b border-[#E2E4EA]/80 hover:bg-[#F5F7FB]/60">
-                <td className="pl-4 pr-3 py-3.5 font-semibold text-[#0B2E59]">{r.name}</td>
+                <td className="pl-4 pr-3 py-3.5 font-semibold text-[#0B2E59]">
+                  <div className="flex items-center gap-2.5">
+                    <PlaceholderImage
+                      src={r.profileImageUrl}
+                      alt={r.name}
+                      className="h-9 w-9 shrink-0 rounded-full border border-suzuki-line bg-suzuki-mist"
+                      imgClassName="h-full w-full object-cover"
+                    />
+                    <span>{r.name}</span>
+                  </div>
+                </td>
                 <td className="px-3 py-3.5 text-[#64748B]">{r.mobileNumber}</td>
                 <td className="px-3 py-3.5 text-[#64748B]">{r.email}</td>
                 <td className="px-3 py-3.5 text-[#64748B]">{r.distributorName}</td>
@@ -332,10 +412,33 @@ export default function RetailersPage() {
                       </>
                     ) : tab === 'requests' && isStaff ? (
                       <span className="text-[11px] font-semibold text-suzuki-mute">Waiting on distributor</span>
-                    ) : tab === 'list' ? (
-                      <RequestActionButton tone="view" title="Remove" onClick={() => undefined}>
-                        <Trash2 size={15} />
-                      </RequestActionButton>
+                    ) : tab === 'list' && role === 'SuperAdmin' ? (
+                      <>
+                        {r.superAdminApprovalStatus === 'Approved' && (r.isBlocked || !r.isActive) && (
+                          <RequestActionButton
+                            tone="approve"
+                            title="Reactivate"
+                            onClick={() => {
+                              if (window.confirm(`Reactivate ${r.name}?`)) {
+                                reactivateRetailer.mutate(r.id)
+                              }
+                            }}
+                          >
+                            <Power size={15} />
+                          </RequestActionButton>
+                        )}
+                        <RequestActionButton
+                          tone="reject"
+                          title="Remove"
+                          onClick={() => {
+                            if (window.confirm(`Delete ${r.name}? They will be removed from the list and cannot log in.`)) {
+                              removeRetailer.mutate(r.id)
+                            }
+                          }}
+                        >
+                          <Trash2 size={15} />
+                        </RequestActionButton>
+                      </>
                     ) : null}
                   </div>
                 </td>
@@ -371,7 +474,7 @@ export default function RetailersPage() {
 
 function StatusPill({ status }: { status: string }) {
   const ok = status === 'Active' || status === 'Approved'
-  const bad = status.includes('Rejected')
+  const bad = status.includes('Rejected') || status === 'Deactivated'
   const warn =
     status.includes('Awaiting') ||
     status.includes('Sent Back') ||

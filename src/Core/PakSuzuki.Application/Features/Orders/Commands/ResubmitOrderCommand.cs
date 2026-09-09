@@ -36,11 +36,16 @@ public class ResubmitOrderCommandHandler : IRequestHandler<ResubmitOrderCommand>
 {
     private readonly IApplicationDbContext _context;
     private readonly ICurrentUserService _currentUser;
+    private readonly IAppNotificationService _notifications;
 
-    public ResubmitOrderCommandHandler(IApplicationDbContext context, ICurrentUserService currentUser)
+    public ResubmitOrderCommandHandler(
+        IApplicationDbContext context,
+        ICurrentUserService currentUser,
+        IAppNotificationService notifications)
     {
         _context = context;
         _currentUser = currentUser;
+        _notifications = notifications;
     }
 
     public async Task Handle(ResubmitOrderCommand request, CancellationToken ct)
@@ -62,7 +67,7 @@ public class ResubmitOrderCommandHandler : IRequestHandler<ResubmitOrderCommand>
             throw new ConflictException(
                 $"Order is in status '{order.Status}'. Only orders sent back for modification can be resubmitted.");
 
-        var whtPercent = order.SubTotal > 0 ? order.WhtAmount / order.SubTotal * 100 : 0m;
+        var whtPercent = OrderWhtCalculator.PercentFromOrder(order.SubTotal, order.WhtAmount);
 
         if (request.Items is { Count: > 0 })
         {
@@ -95,8 +100,20 @@ public class ResubmitOrderCommandHandler : IRequestHandler<ResubmitOrderCommand>
         }
 
         // Keep distributorRemarks so the retailer (and distributor) still see the amendment note.
+        if (!string.IsNullOrWhiteSpace(request.Remarks))
+            order.RetailerRemarks = request.Remarks.Trim();
+
         order.Status = OrderStatus.PendingDistributorApproval;
         await _context.SaveChangesAsync(ct);
+
+        await _notifications.NotifyDistributorAsync(
+            order.DistributorId,
+            "Order resubmitted",
+            $"Order {order.OrderNumber} was updated and needs your review again.",
+            NotificationCategories.Order,
+            $"/orders/{order.Id}",
+            order.Id,
+            ct);
     }
 
     private static void RecalculateTotals(Domain.Entities.Order order, decimal whtPercent)
@@ -108,7 +125,7 @@ public class ResubmitOrderCommandHandler : IRequestHandler<ResubmitOrderCommand>
         order.SubTotal = remaining.Sum(i => i.LineSubTotal);
         order.TotalGst = remaining.Sum(i => i.LineGst);
         order.TotalFed = remaining.Sum(i => i.LineFed);
-        order.WhtAmount = Math.Round(order.SubTotal * whtPercent / 100, 2);
+        order.WhtAmount = OrderWhtCalculator.AmountFromSubTotal(order.SubTotal, whtPercent);
         order.GrandTotal = order.SubTotal + order.TotalGst + order.TotalFed + order.WhtAmount;
     }
 }

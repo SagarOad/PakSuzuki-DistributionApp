@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 import { api } from '@/api/axiosClient'
 import { BrandPair } from '@/components/brand/Logos'
+import ImageUploadFields from '@/components/forms/ImageUploadFields'
 import LocationPickerMap, { type LatLng } from '@/components/maps/LocationPickerMap'
 
 interface RegionRow {
@@ -32,6 +33,8 @@ export default function DistributorRegisterPage() {
   const navigate = useNavigate()
   const [form, setForm] = useState(emptyForm)
   const [location, setLocation] = useState<LatLng | null>(null)
+  const [profileImage, setProfileImage] = useState<File | null>(null)
+  const [businessImages, setBusinessImages] = useState<File[]>([])
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -91,29 +94,38 @@ export default function DistributorRegisterPage() {
       setError('Password must be at least 8 characters.')
       return
     }
+    if (businessImages.length === 0) {
+      setError('Please add at least one shop / business photo from your camera or gallery.')
+      return
+    }
 
     setLoading(true)
     try {
-      await api.post('/distributors/register', {
-        name: form.name.trim(),
-        cnic: form.cnic.trim(),
-        mobileNumber: form.mobileNumber.trim(),
-        email: form.email.trim(),
-        password: form.password,
-        businessName: form.businessName.trim(),
-        ntn: form.ntn.trim(),
-        iban: form.iban.trim(),
-        businessAddress: form.businessAddress.trim(),
-        latitude: location.latitude,
-        longitude: location.longitude,
-        regionId: form.regionId
-      })
+      const body = new FormData()
+      body.append('name', form.name.trim())
+      body.append('cnic', form.cnic.trim())
+      body.append('mobileNumber', form.mobileNumber.trim())
+      body.append('email', form.email.trim())
+      body.append('password', form.password)
+      body.append('businessName', form.businessName.trim())
+      body.append('ntn', form.ntn.trim())
+      body.append('iban', form.iban.trim())
+      body.append('businessAddress', form.businessAddress.trim())
+      body.append('latitude', String(location.latitude))
+      body.append('longitude', String(location.longitude))
+      body.append('regionId', form.regionId)
+      if (profileImage) body.append('profileImage', profileImage)
+      businessImages.forEach((file) => body.append('businessImages', file))
+
+      await api.post('/distributors/register', body)
       setSuccess(
-        'Registration submitted. Pakistan Suzuki Super Admin will review your application. ' +
+        'Registration submitted with your photos. Pakistan Suzuki Super Admin will review your application. ' +
           'You can sign in after approval (or if asked to correct your details).'
       )
       setForm(emptyForm)
       setLocation(null)
+      setProfileImage(null)
+      setBusinessImages([])
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const data = err.response?.data as {
@@ -253,6 +265,15 @@ export default function DistributorRegisterPage() {
               onChange={setLocation}
               center={regionCenter}
               className="h-72"
+            />
+          </Section>
+
+          <Section title="Photos">
+            <ImageUploadFields
+              profileImage={profileImage}
+              businessImages={businessImages}
+              onProfileChange={setProfileImage}
+              onBusinessChange={setBusinessImages}
             />
           </Section>
 

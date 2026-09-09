@@ -41,6 +41,7 @@ public static class DependencyInjection
         services.AddScoped<IIdentityService, IdentityService>();
         services.AddScoped<ISapIntegrationService, SapIntegrationService>();
         services.AddScoped<IFileStorageService>(_ => new LocalFileStorageService(webRootPath));
+        services.AddScoped<IIncentiveReportPdfService, IncentiveReportPdfService>();
         services.AddSingleton<IOtpService, OtpService>();
 
         services.Configure<Email.SmtpOptions>(configuration.GetSection(Email.SmtpOptions.SectionName));

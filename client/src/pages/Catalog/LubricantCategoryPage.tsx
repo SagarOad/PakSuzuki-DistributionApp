@@ -1,8 +1,9 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/axiosClient'
-import { useCart } from '@/context/CartContext'
+import { catalogFilterParams, useCart } from '@/context/CartContext'
 import { ProductCard } from './ProductCard'
+import { OrderLaneFilters } from './OrderLaneFilters'
 import type { CatalogBanner, CatalogProductCard } from './catalogTypes'
 
 interface Paged<T> {
@@ -11,16 +12,23 @@ interface Paged<T> {
 }
 
 const CATEGORY_META: Record<string, { title: string; apiCategory: string }> = {
-  'motor-car': { title: 'Lubricant Motor Car', apiCategory: 'Motor Car' },
-  'motor-bike': { title: 'Lubricant Motor Bike', apiCategory: 'Motor Bike' },
-  all: { title: 'All Lubricant', apiCategory: 'All' }
+  'engine-oil': { title: 'Engine Oil', apiCategory: 'Engine Oil' },
+  'gear-oil': { title: 'Gear Oil', apiCategory: 'Gear Oil' },
+  chemical: { title: 'Chemical', apiCategory: 'Chemical' },
+  chemicals: { title: 'Chemical', apiCategory: 'Chemical' },
+  parts: { title: 'Parts', apiCategory: 'Parts' },
+  'motor-car': { title: 'Engine Oil', apiCategory: 'Engine Oil' },
+  'motor-bike': { title: 'Gear Oil', apiCategory: 'Gear Oil' },
+  'motor-oil': { title: 'Engine Oil', apiCategory: 'Engine Oil' },
+  all: { title: 'All Lubricants', apiCategory: 'All' }
 }
 
 export default function LubricantCategoryPage() {
   const { categoryKey = 'all' } = useParams()
   const navigate = useNavigate()
-  const { addItem } = useCart()
+  const { addItem, orderContext } = useCart()
   const meta = CATEGORY_META[categoryKey] ?? CATEGORY_META.all
+  const filters = catalogFilterParams(orderContext)
 
   const bannersQuery = useQuery({
     queryKey: ['catalog-banners', 'Header', meta.apiCategory],
@@ -28,12 +36,14 @@ export default function LubricantCategoryPage() {
   })
 
   const productsQuery = useQuery({
-    queryKey: ['catalog-products', meta.apiCategory],
+    queryKey: ['catalog-products', meta.apiCategory, filters],
+    enabled: !!orderContext,
     queryFn: async () =>
       (await api.get<Paged<CatalogProductCard>>('/catalog/products', {
         params: {
           category: meta.apiCategory === 'All' ? undefined : meta.apiCategory,
-          pageSize: 48
+          pageSize: 48,
+          ...filters
         }
       })).data
   })
@@ -46,6 +56,7 @@ export default function LubricantCategoryPage() {
     ) ?? bannersQuery.data?.[0]
 
   const quickAdd = async (product: CatalogProductCard, mode: 'cart' | 'buy') => {
+    if (!orderContext) return
     const detail = (await api.get<{
       id: string
       sku: string
@@ -53,7 +64,15 @@ export default function LubricantCategoryPage() {
       description?: string | null
       categoryName?: string | null
       primaryImageUrl?: string | null
-      variants: { id: string; typeName: string; distributorPrice: number; retailPrice: number; inStock: boolean }[]
+      variants: {
+        id: string
+        typeName: string
+        distributorPrice: number
+        retailPrice: number
+        inStock: boolean
+        gstPercent?: number | null
+        fedPercent?: number | null
+      }[]
     }>(`/catalog/products/${product.id}`)).data
 
     const variant = detail.variants.find((v) => v.inStock) ?? detail.variants[0]
@@ -68,14 +87,16 @@ export default function LubricantCategoryPage() {
       categoryName: detail.categoryName,
       imageUrl: detail.primaryImageUrl,
       packLabel: variant.typeName,
-      unitPrice: variant.distributorPrice || variant.retailPrice || product.displayPrice
+      unitPrice: variant.distributorPrice || variant.retailPrice || product.displayPrice,
+      gstPercent: variant.gstPercent != null ? Number(variant.gstPercent) : undefined,
+      fedPercent: variant.fedPercent != null ? Number(variant.fedPercent) : undefined
     })
     if (mode === 'buy') navigate('/cart')
   }
 
   return (
     <div className="space-y-6 pb-8">
-      <section className="relative rounded-2xl overflow-hidden min-h-[200px] sm:min-h-[260px] bg-[#0b1f4a] shadow-card">
+      <section className="relative rounded-2xl overflow-hidden min-h-[160px] sm:min-h-[200px] bg-[#0b1f4a] shadow-card">
         {banner?.imageUrl ? (
           <img
             src={banner.imageUrl}
@@ -90,14 +111,30 @@ export default function LubricantCategoryPage() {
         )}
       </section>
 
-      <section>
-        <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy mb-4">{meta.title}</h2>
-        {productsQuery.isLoading ? (
+      <section className="space-y-3">
+        <div className="flex items-end justify-between gap-3">
+          <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">{meta.title}</h2>
+        </div>
+
+        <OrderLaneFilters compact />
+
+        {!orderContext ? (
+          <div className="rounded-xl border border-dashed border-suzuki-line bg-suzuki-mist/40 p-8 text-center">
+            <p className="text-sm text-suzuki-mute">
+              Select source, delivery type, and supplier above to load products.
+            </p>
+          </div>
+        ) : productsQuery.isLoading ? (
           <p className="text-sm text-suzuki-mute">Loading products…</p>
         ) : (productsQuery.data?.items.length ?? 0) === 0 ? (
-          <p className="text-sm text-suzuki-mute">No products in this category yet.</p>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center space-y-1">
+            <p className="text-sm font-semibold text-amber-900">No products match this lane</p>
+            <p className="text-xs text-amber-800">
+              Change the filters above — you do not need to clear and restart.
+            </p>
+          </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
             {(productsQuery.data?.items ?? []).map((p) => (
               <ProductCard
                 key={p.id}

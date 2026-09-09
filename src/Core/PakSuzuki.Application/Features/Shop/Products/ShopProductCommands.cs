@@ -2,6 +2,7 @@ using FluentValidation;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
+using PakSuzuki.Application.Common.Images;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Domain.Entities;
 using PakSuzuki.Domain.Enums;
@@ -9,8 +10,8 @@ using PakSuzuki.Domain.Enums;
 namespace PakSuzuki.Application.Features.Shop.Products;
 
 public record ProductVariantDto(
-    Guid Id, string TypeName, decimal UnitQuantity, decimal RetailPrice, decimal DistributorPrice,
-    decimal CostPrice, decimal GstPercent, decimal FedPercent, decimal WhtPercent, decimal ProfitAmount,
+    Guid Id, string TypeName, decimal UnitQuantity, decimal? RetailPrice, decimal? DistributorPrice,
+    decimal? CostPrice, decimal GstPercent, decimal FedPercent, decimal WhtPercent, decimal? ProfitAmount,
     bool InStock, bool IsPublished, int SortOrder);
 
 public record ShopProductDetailDto(
@@ -24,12 +25,18 @@ public record ProductVariantInput(
     decimal CostPrice, decimal GstPercent, decimal FedPercent, decimal WhtPercent, decimal ProfitAmount,
     bool InStock, bool IsPublished, int SortOrder = 0);
 
-public record GetShopProductByIdQuery(Guid Id) : IRequest<ShopProductDetailDto>;
+public record GetShopProductByIdQuery(Guid Id, string ViewerRole) : IRequest<ShopProductDetailDto>;
 
 public class GetShopProductByIdQueryHandler : IRequestHandler<GetShopProductByIdQuery, ShopProductDetailDto>
 {
     private readonly IApplicationDbContext _context;
-    public GetShopProductByIdQueryHandler(IApplicationDbContext context) => _context = context;
+    private readonly IPriceVisibilityService _visibility;
+
+    public GetShopProductByIdQueryHandler(IApplicationDbContext context, IPriceVisibilityService visibility)
+    {
+        _context = context;
+        _visibility = visibility;
+    }
 
     public async Task<ShopProductDetailDto> Handle(GetShopProductByIdQuery request, CancellationToken ct)
     {
@@ -39,13 +46,16 @@ public class GetShopProductByIdQueryHandler : IRequestHandler<GetShopProductById
             .FirstOrDefaultAsync(p => p.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(Product), request.Id);
 
-        return Map(product);
+        var visibility = await _visibility.GetAsync(request.ViewerRole, ct);
+        return Map(product, visibility);
     }
 
-    internal static ShopProductDetailDto Map(Product product)
+    internal static ShopProductDetailDto Map(Product product, PriceVisibility visibility)
     {
         var variants = product.Variants.OrderBy(v => v.SortOrder).ThenBy(v => v.TypeName).ToList();
-        var (suzukiPct, distPct) = ProfitMargins(variants);
+        var (suzukiPct, distPct) = visibility.CanSeeCost && visibility.CanSeePurchase
+            ? ProfitMargins(variants)
+            : (0m, 0m);
 
         return new ShopProductDetailDto(
             product.Id, product.Sku, product.Name, product.Description, product.Bio,
@@ -53,8 +63,13 @@ public class GetShopProductByIdQueryHandler : IRequestHandler<GetShopProductById
             product.PrimaryImageUrl, product.IsPublished, product.InStock, product.IsActive,
             suzukiPct, distPct,
             variants.Select(v => new ProductVariantDto(
-                v.Id, v.TypeName, v.UnitQuantity, v.RetailPrice, v.DistributorPrice, v.CostPrice,
-                v.GstPercent, v.FedPercent, v.WhtPercent, v.ProfitAmount, v.InStock, v.IsPublished, v.SortOrder
+                v.Id, v.TypeName, v.UnitQuantity,
+                visibility.CanSeeSale ? v.RetailPrice : null,
+                visibility.CanSeePurchase ? v.DistributorPrice : null,
+                visibility.CanSeeCost ? v.CostPrice : null,
+                v.GstPercent, v.FedPercent, v.WhtPercent,
+                visibility.CanSeePurchase ? v.ProfitAmount : null,
+                v.InStock, v.IsPublished, v.SortOrder
             )).ToList(),
             product.SectionImages.OrderBy(i => i.SortOrder).Select(i => i.ImageUrl).ToList());
     }
@@ -337,13 +352,29 @@ public class UploadProductSectionImagesCommandHandler : IRequestHandler<UploadPr
     }
 }
 
-public record UploadShopMediaCommand(string FileName, Stream Content, string Folder = "shop-media") : IRequest<string>;
+public record UploadShopMediaCommand(
+    string FileName,
+    Stream Content,
+    string Folder = "shop-media",
+    string? AspectKind = null) : IRequest<string>;
 
 public class UploadShopMediaCommandHandler : IRequestHandler<UploadShopMediaCommand, string>
 {
     private readonly IFileStorageService _files;
     public UploadShopMediaCommandHandler(IFileStorageService files) => _files = files;
 
-    public async Task<string> Handle(UploadShopMediaCommand request, CancellationToken ct) =>
-        await _files.UploadAsync(request.Content, request.FileName, request.Folder, ct);
+    public async Task<string> Handle(UploadShopMediaCommand request, CancellationToken ct)
+    {
+        await using var buffer = new MemoryStream();
+        await request.Content.CopyToAsync(buffer, ct);
+        buffer.Position = 0;
+
+        var kind = request.AspectKind ?? BannerImageAspect.KindFromFolder(request.Folder);
+        if (!string.IsNullOrWhiteSpace(kind))
+            BannerImageAspect.EnsureValid(buffer, kind);
+
+        buffer.Position = 0;
+        return await _files.UploadAsync(buffer, request.FileName, request.Folder, ct);
+    }
 }
+

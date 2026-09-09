@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Features.Shop.Banners;
 using PakSuzuki.Application.Features.Shop.Products;
 using PakSuzuki.Domain.Enums;
@@ -63,19 +64,25 @@ public class ShopBannersController : BaseApiController
 [Authorize]
 public class ShopController : BaseApiController
 {
+    private readonly ICurrentUserService _currentUser;
+    public ShopController(ICurrentUserService currentUser) => _currentUser = currentUser;
+
     [HttpPost("media")]
     [Authorize(Policy = "AdminOrAbove")]
     [RequestSizeLimit(20_000_000)]
-    public async Task<IActionResult> UploadMedia(IFormFile file, [FromQuery] string folder = "shop-media")
+    public async Task<IActionResult> UploadMedia(
+        IFormFile file,
+        [FromQuery] string folder = "shop-media",
+        [FromQuery] string? aspectKind = null)
     {
         await using var stream = file.OpenReadStream();
-        var url = await Mediator.Send(new UploadShopMediaCommand(file.FileName, stream, folder));
+        var url = await Mediator.Send(new UploadShopMediaCommand(file.FileName, stream, folder, aspectKind));
         return Ok(new { url });
     }
 
     [HttpGet("products/{id:guid}")]
     public async Task<IActionResult> GetProduct(Guid id) =>
-        Ok(await Mediator.Send(new GetShopProductByIdQuery(id)));
+        Ok(await Mediator.Send(new GetShopProductByIdQuery(id, _currentUser.Role ?? string.Empty)));
 
     [HttpPost("products")]
     [Authorize(Policy = "AdminOrAbove")]

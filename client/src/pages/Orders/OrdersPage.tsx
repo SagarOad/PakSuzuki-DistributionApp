@@ -11,6 +11,7 @@ import { useAuthStore } from '@/context/authStore'
 import { StatCard, StatCardRow } from '@/components/ui/StatCard'
 import { StatsGraph } from '@/components/ui/StatsGraph'
 import { OrderTable, ExportExcelButton, DateFilterField } from '@/components/ui/DataTable'
+import { downloadExcel, fetchAllFromApi, inDateRange, exportFailed } from '@/utils/excelExport'
 import clsx from 'clsx'
 import { COMPLETED_STATUSES, CANCELED_STATUSES, toUiStatus, formatOrderDate } from './orderTypes'
 
@@ -22,6 +23,8 @@ interface OrderRow {
   retailerLocation?: string | null
   distributorName: string
   status: string
+  statusLabel?: string | null
+  statusCode?: string | null
   grandTotal: number
   createdAtUtc: string
   thresholdReached: boolean
@@ -30,6 +33,9 @@ interface OrderRow {
   categorySummary?: string | null
   packsSummary?: string | null
   totalUnits?: number
+  statusColor?: string | null
+  sapInvoiceNumber?: string | null
+  pakSuzukiRemarks?: string | null
 }
 
 interface Paged<T> {
@@ -122,6 +128,7 @@ function DistributorOrdersPage() {
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [period, setPeriod] = useState<'Month' | 'Week' | 'Year'>('Month')
+  const [exporting, setExporting] = useState(false)
 
   const allOrdersQuery = useQuery({
     queryKey: ['orders-distributor-all'],
@@ -212,8 +219,46 @@ function DistributorOrdersPage() {
           o.distributorName.toLowerCase().includes(q)
       )
     }
+    list = list.filter((o) => inDateRange(o.createdAtUtc, fromDate, toDate))
     return list
-  }, [items, tab, section, search])
+  }, [items, tab, section, search, fromDate, toDate])
+
+  async function exportOrders() {
+    setExporting(true)
+    try {
+      const columns =
+        section === 'retailer'
+          ? [
+              { header: 'Order Date', value: (o: OrderRow) => formatOrderDate(o.createdAtUtc) },
+              { header: 'Order Number', value: (o: OrderRow) => o.orderNumber },
+              { header: 'Retailer Name', value: (o: OrderRow) => o.retailerName ?? '' },
+              { header: 'Retailer Location', value: (o: OrderRow) => o.retailerLocation ?? '' },
+              { header: 'Shipped By', value: (o: OrderRow) => (o.thresholdReached ? 'Pak Suzuki' : o.shippedBy || 'Distributor') },
+              { header: 'Status', value: (o: OrderRow) => o.statusLabel || toUiStatus(o.status, o.statusCode) },
+              { header: 'Total (PKR)', value: (o: OrderRow) => o.grandTotal }
+            ]
+          : [
+              { header: 'Order Date', value: (o: OrderRow) => formatOrderDate(o.createdAtUtc) },
+              { header: 'Order Number', value: (o: OrderRow) => o.orderNumber },
+              { header: 'Product Information', value: (o: OrderRow) => o.productSummary ?? '' },
+              { header: 'Category', value: (o: OrderRow) => o.categorySummary ?? '' },
+              { header: 'Packs', value: (o: OrderRow) => o.packsSummary ?? '' },
+              { header: 'Unit', value: (o: OrderRow) => o.totalUnits ?? '' },
+              { header: 'Status', value: (o: OrderRow) => o.statusLabel || toUiStatus(o.status, o.statusCode) },
+              { header: 'Total (PKR)', value: (o: OrderRow) => o.grandTotal }
+            ]
+
+      downloadExcel(
+        `orders-${section}-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
+        columns,
+        filteredItems
+      )
+    } catch (err) {
+      exportFailed(err)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const pageItems = filteredItems.slice((page - 1) * 10, page * 10)
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / 10))
@@ -461,12 +506,12 @@ function DistributorOrdersPage() {
           filterBar={
             <>
               <span className="text-sm font-semibold text-[#0B2E59]">From</span>
-              <DateFilterField value={fromDate} onChange={setFromDate} />
+              <DateFilterField value={fromDate} onChange={(v) => { setFromDate(v); setPage(1) }} />
               <span className="text-sm font-semibold text-[#0B2E59]">To</span>
-              <DateFilterField value={toDate} onChange={setToDate} />
+              <DateFilterField value={toDate} onChange={(v) => { setToDate(v); setPage(1) }} />
             </>
           }
-          toolbarActions={<ExportExcelButton />}
+          toolbarActions={<ExportExcelButton onClick={() => void exportOrders()} loading={exporting} />}
           columns={
             section === 'retailer'
               ? [
@@ -506,7 +551,10 @@ function DistributorOrdersPage() {
           }}
         >
           {pageItems.map((o) => {
-            const canAmend = section === 'retailer' && o.status === 'PendingDistributorApproval'
+            const canAmend = section === 'retailer' && o.status === 'PendingDistributorApproval' && !o.pakSuzukiRemarks
+            const needsPakSuzukiAmendmentReview =
+              (o.statusCode || o.status) === 'PendingDistributorApproval' &&
+              (!!o.pakSuzukiRemarks || (o.statusLabel || '').toLowerCase().includes('amendment') || section === 'manufacture')
             return (
             <tr key={o.id} className="border-b border-[#E2E4EA]/80 hover:bg-[#F5F7FB]/60">
               <td className="pl-4 pr-3 py-3.5 text-[#64748B]">{formatOrderDate(o.createdAtUtc)}</td>
@@ -539,7 +587,14 @@ function DistributorOrdersPage() {
                 </>
               )}
               <td className="px-3 py-3.5">
-                <OrderStatusPill status={o.status} manufactureView={section === 'manufacture'} />
+                <OrderStatusPill
+                  status={o.status}
+                  statusCode={o.statusCode}
+                  statusLabel={o.statusLabel}
+                  statusColor={o.statusColor}
+                  manufactureView={section === 'manufacture'}
+                  thresholdReached={o.thresholdReached}
+                />
               </td>
               <td className="pl-3 pr-4 py-3.5 text-right whitespace-nowrap">
                 <button
@@ -556,6 +611,16 @@ function DistributorOrdersPage() {
                     onClick={() => navigate(`/orders/${o.id}/amend`)}
                     className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
                     title="Amend order"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                )}
+                {needsPakSuzukiAmendmentReview && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/orders/${o.id}/amend`)}
+                    className="p-1.5 rounded-lg text-amber-700 hover:bg-amber-50"
+                    title="New amendment — approve or change qty"
                   >
                     <Pencil size={16} />
                   </button>
@@ -586,6 +651,7 @@ function StaffOrdersExperience() {
   const [page, setPage] = useState(1)
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
+  const [exporting, setExporting] = useState(false)
 
   const dashQuery = useQuery({
     queryKey: ['dashboard-superadmin'],
@@ -596,7 +662,7 @@ function StaffOrdersExperience() {
     queryKey: ['orders-page', page, search],
     queryFn: async () =>
       (await api.get<Paged<OrderRow>>('/orders', {
-        params: { pageNumber: page, pageSize: 50 }
+        params: { pageNumber: page, pageSize: 50, search: search || undefined }
       })).data
   })
 
@@ -604,29 +670,59 @@ function StaffOrdersExperience() {
   const completed = countStatuses(dashQuery.data?.ordersByStatus, COMPLETED)
   const canceled = countStatuses(dashQuery.data?.ordersByStatus, CANCELED)
 
-  const filteredItems = useMemo(() => {
-    // API already scopes Super Admin to Direct + Ship-to-Party; client tabs refine further.
-    let list = ordersQuery.data?.items ?? []
-    if (tab === 'process') list = list.filter((o) => PROCESS.includes(o.status) || PENDING.includes(o.status))
-    if (tab === 'completed') list = list.filter((o) => COMPLETED.includes(o.status))
-    if (tab === 'canceled') list = list.filter((o) => CANCELED.includes(o.status))
+  function filterStaffOrders(list: OrderRow[]) {
+    let next = list
+    if (tab === 'process') next = next.filter((o) => PROCESS.includes(o.status) || PENDING.includes(o.status))
+    if (tab === 'completed') next = next.filter((o) => COMPLETED.includes(o.status))
+    if (tab === 'canceled') next = next.filter((o) => CANCELED.includes(o.status))
     if (tab === 'threshold') {
-      list = list.filter((o) => o.thresholdReached || (isRetailerSource(o.source) && o.shippedBy === 'Pak Suzuki'))
+      next = next.filter((o) => o.thresholdReached || (isRetailerSource(o.source) && o.shippedBy === 'Pak Suzuki'))
     }
     if (tab === 'manufacture') {
-      list = list.filter((o) => isManufactureSource(o.source))
+      next = next.filter((o) => isManufactureSource(o.source))
     }
     if (search.trim()) {
       const q = search.toLowerCase()
-      list = list.filter(
+      next = next.filter(
         (o) =>
           o.orderNumber.toLowerCase().includes(q) ||
           o.distributorName.toLowerCase().includes(q) ||
           (o.retailerName ?? '').toLowerCase().includes(q)
       )
     }
-    return list
-  }, [ordersQuery.data, tab, search])
+    return next.filter((o) => inDateRange(o.createdAtUtc, fromDate, toDate))
+  }
+
+  const filteredItems = useMemo(
+    () => filterStaffOrders(ordersQuery.data?.items ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ordersQuery.data, tab, search, fromDate, toDate]
+  )
+
+  async function exportStaffOrders() {
+    setExporting(true)
+    try {
+      const all = await fetchAllFromApi<OrderRow>('/orders', { search: search || undefined })
+      const rows = filterStaffOrders(all)
+      downloadExcel(
+        `orders-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
+        [
+          { header: 'Order Date', value: (o) => formatOrderDate(o.createdAtUtc) },
+          { header: 'Order Number', value: (o) => o.orderNumber },
+          { header: 'Retailer', value: (o) => o.retailerName ?? '' },
+          { header: 'Distributor', value: (o) => o.distributorName },
+          { header: 'Shipped By', value: (o) => o.shippedBy },
+          { header: 'Total (PKR)', value: (o) => o.grandTotal },
+          { header: 'Status', value: (o) => o.statusLabel || toUiStatus(o.status, o.statusCode) }
+        ],
+        rows
+      )
+    } catch (err) {
+      exportFailed(err)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const chartPoints = useMemo(() => {
     if (period === 'Week') return [8, 14, 11, 18, 22, 16, 24]
@@ -690,16 +786,16 @@ function StaffOrdersExperience() {
       <OrderTable
         title="Orders List"
         search={search}
-        onSearchChange={setSearch}
+        onSearchChange={(v) => { setSearch(v); setPage(1) }}
         filterBar={
           <>
             <span className="text-sm font-semibold text-[#0B2E59]">From</span>
-            <DateFilterField value={fromDate} onChange={setFromDate} />
+            <DateFilterField value={fromDate} onChange={(v) => { setFromDate(v); setPage(1) }} />
             <span className="text-sm font-semibold text-[#0B2E59]">To</span>
-            <DateFilterField value={toDate} onChange={setToDate} />
+            <DateFilterField value={toDate} onChange={(v) => { setToDate(v); setPage(1) }} />
           </>
         }
-        toolbarActions={<ExportExcelButton />}
+        toolbarActions={<ExportExcelButton onClick={() => void exportStaffOrders()} loading={exporting} />}
         columns={[
           { key: 'date', header: 'Order Date' },
           { key: 'number', header: 'Order Number' },
@@ -738,9 +834,15 @@ function StaffOrdersExperience() {
               Rs {o.grandTotal.toLocaleString()}
             </td>
             <td className="px-3 py-3.5">
-              <OrderStatusPill status={o.status} />
+              <OrderStatusPill
+                status={o.status}
+                statusCode={o.statusCode}
+                statusLabel={o.statusLabel}
+                statusColor={o.statusColor}
+                thresholdReached={o.thresholdReached}
+              />
             </td>
-            <td className="pl-3 pr-4 py-3.5 text-right">
+            <td className="pl-3 pr-4 py-3.5 text-right whitespace-nowrap">
               <button
                 type="button"
                 onClick={() => navigate(`/orders/${o.id}`)}
@@ -749,6 +851,16 @@ function StaffOrdersExperience() {
               >
                 <Eye size={16} />
               </button>
+              {o.status === 'PendingPakSuzukiApproval' && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/orders/${o.id}/amend`)}
+                  className="p-1.5 rounded-lg text-suzuki-blue hover:bg-suzuki-ice"
+                  title="Amend"
+                >
+                  <Pencil size={16} />
+                </button>
+              )}
             </td>
           </tr>
         ))}
@@ -757,13 +869,55 @@ function StaffOrdersExperience() {
   )
 }
 
-function OrderStatusPill({ status, manufactureView }: { status: string; manufactureView?: boolean }) {
-  let ui = toUiStatus(status)
-  if (manufactureView && ui === 'Pending' && status === 'PendingPakSuzukiApproval') {
+function OrderStatusPill({
+  status,
+  statusCode,
+  statusLabel,
+  manufactureView,
+  statusColor,
+  thresholdReached
+}: {
+  status: string
+  statusCode?: string | null
+  statusLabel?: string | null
+  manufactureView?: boolean
+  statusColor?: string | null
+  thresholdReached?: boolean
+}) {
+  const code = statusCode || status
+  let ui = toUiStatus(status, statusCode)
+  if (manufactureView && ui === 'Pending' && code === 'PendingPakSuzukiApproval') {
     ui = 'In Process'
   }
+  const label =
+    statusLabel ||
+    (code === 'PendingPakSuzukiApproval' || code === 'ForwardedToPakSuzuki'
+      ? 'Sent to Pak Suzuki'
+      : code === 'SentBackForModification'
+        ? 'Sent back for amendment'
+        : code === 'PendingDistributorApproval' && (manufactureView || thresholdReached)
+          ? manufactureView
+            ? 'New amendment'
+            : 'Threshold met — action needed'
+          : code === 'SubmittedToSap' || code === 'ApprovedByPakSuzuki'
+            ? manufactureView
+              ? 'Pending'
+              : ui
+            : ui)
+
+  const fromSap =
+    statusColor === 'Green'
+      ? 'bg-emerald-100 text-suzuki-ok'
+      : statusColor === 'Grey'
+        ? 'bg-slate-200 text-suzuki-mute'
+        : statusColor === 'Yellow'
+          ? 'bg-orange-100 text-orange-800'
+          : statusColor === 'Red'
+            ? 'bg-rose-100 text-suzuki-red'
+            : null
   const cls =
-    ui === 'Completed'
+    fromSap
+    ?? (ui === 'Completed'
       ? 'bg-emerald-100 text-suzuki-ok'
       : ui === 'Cancelled'
         ? 'bg-slate-200 text-suzuki-mute'
@@ -771,7 +925,11 @@ function OrderStatusPill({ status, manufactureView }: { status: string; manufact
           ? 'bg-orange-100 text-orange-800'
           : ui === 'Pending'
             ? 'bg-amber-100 text-amber-800'
-            : 'bg-rose-100 text-suzuki-red'
+            : 'bg-rose-100 text-suzuki-red')
 
-  return <span className={clsx('inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-bold', cls)}>{ui}</span>
+  return (
+    <span className={clsx('inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-bold max-w-[14rem] text-left leading-snug', cls)}>
+      {label}
+    </span>
+  )
 }

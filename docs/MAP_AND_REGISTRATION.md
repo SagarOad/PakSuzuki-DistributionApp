@@ -19,7 +19,8 @@ For production at scale you can later swap tiles to Mapbox/Google; marker APIs s
 1. Mobile calls `GET /api/regions` → city list with `centerLatitude` / `centerLongitude`
 2. User picks **RegionId** (city they belong to) — required  
 3. User sets shop pin → `latitude` / `longitude` (GPS or map picker)  
-4. `POST /api/distributors/register` with `regionId`, `latitude`, `longitude`, address, …
+4. User takes / picks photos (see **Photos** below)  
+5. `POST /api/distributors/register` with `regionId`, `latitude`, `longitude`, address, photos, …
 
 Those pins appear on Map View after SuperAdmin approval.
 
@@ -34,13 +35,58 @@ GET /api/distributors/nearest?latitude=30.15&longitude=71.52&regionId=<optional>
 ```
 
 4. App shows ranked suggestions (`distanceKm`, `rank`) — user confirms one  
-5. `POST /api/retailers/register` with that `distributorId` + lat/long  
+5. `POST /api/retailers/register` with that `distributorId` + lat/long + photos  
+   (omit `distributorId` to auto-assign the nearest approved distributor)
 
 Also available (full list, now includes coordinates):
 
 ```http
 GET /api/distributors/approved?regionId=
 ```
+
+---
+
+## Photos are part of registration
+
+Both registration endpoints are **`multipart/form-data`** — there is no separate
+"register with images" endpoint and no URL field anywhere. The applicant uploads real
+files from camera or gallery; the API stores each file and keeps the resulting storage
+path (`profileImageUrl`, `businessImages[].storageUrl`, e.g. `/uploads/retailer-images/…`).
+
+| Form field | Type | Required | Notes |
+|---|---|---|---|
+| `profileImage` | file | no | Owner / avatar photo |
+| `businessImages` | file (repeat the field) | **yes, at least 1** | Shop front, signboard, interior |
+
+Rules enforced by the API and mirrored in the web UI: JPG / PNG / WEBP / HEIC,
+max **5 MB** per file, max **8** shop photos. If the registration fails, uploaded
+files are removed again so nothing orphans.
+
+Example:
+
+```http
+POST /api/retailers/register
+Content-Type: multipart/form-data
+
+name=Ali Traders
+cnic=42101-1234567-1
+...
+latitude=24.86
+longitude=67.00
+profileImage=@owner.jpg
+businessImages=@shop-front.jpg
+businessImages=@signboard.jpg
+```
+
+After approval, photos can still be changed:
+
+- `POST /api/{distributors|retailers}/profile-image/{id}` — field `file`
+- `POST /api/{distributors|retailers}/business-images/{id}` — field `files`
+
+Both require login and only allow the owner (or Pak Suzuki staff) to upload.
+
+Where the photos show up: distributor detail, retailer detail, the distributor /
+retailer lists (avatar), the Registrations approval queue, and Settings.
 
 ---
 
@@ -63,8 +109,9 @@ Flow:
 1. Fill personal + business fields  
 2. Select **city/region** (`GET /api/regions`)  
 3. Set shop pin via **map click** or **Use my GPS**  
-4. `POST /api/distributors/register` → status `PendingReview`  
-5. **Super Admin** approves / rejects / sends back (existing Distributors Requests UI)
+4. Add profile photo (optional) + shop photos (at least one)  
+5. `POST /api/distributors/register` → status `PendingReview`  
+6. **Super Admin** approves / rejects / sends back (existing Distributors Requests UI)
 
 Retailers remain mobile-first: GPS/map pin → `GET /api/distributors/nearest` → register → **Distributor then Super Admin** approve.
 

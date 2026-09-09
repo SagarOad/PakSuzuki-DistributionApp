@@ -1,30 +1,26 @@
-import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { api } from '@/api/axiosClient'
-import { useCart } from '@/context/CartContext'
+import { useAuth } from '@/context/AuthContext'
+import { catalogFilterParams, useCart } from '@/context/CartContext'
 import { ProductCard } from './ProductCard'
+import { OrderLaneFilters } from './OrderLaneFilters'
 import type { CatalogBanner, CatalogProductCard } from './catalogTypes'
+import { categorySlug } from '@/pages/Shop/shopTypes'
 
 interface Paged<T> {
   items: T[]
   totalCount: number
 }
 
-/**
- * Distributor landing — matches Oil Landing design.
- * Header / category banners + products all come from Super Admin My Shop uploads.
- */
+/** Start Order catalog: category cards (with images only) + lane filters + products. */
 export default function DistributorHomePage() {
   const navigate = useNavigate()
-  const { addItem } = useCart()
-  const [slide, setSlide] = useState(0)
-
-  const bannersQuery = useQuery({
-    queryKey: ['catalog-banners', 'Header'],
-    queryFn: async () => (await api.get<CatalogBanner[]>('/catalog/banners', { params: { type: 'Header' } })).data
-  })
+  const { role } = useAuth()
+  const { addItem, orderContext } = useCart()
+  const isRetailer = role === 'Retailer'
+  const filters = catalogFilterParams(orderContext)
 
   const categoryBannersQuery = useQuery({
     queryKey: ['catalog-banners', 'Category'],
@@ -32,34 +28,18 @@ export default function DistributorHomePage() {
   })
 
   const productsQuery = useQuery({
-    queryKey: ['catalog-products', 'all-home'],
+    queryKey: ['catalog-products', 'all-home', filters],
+    enabled: !!orderContext,
     queryFn: async () =>
       (await api.get<Paged<CatalogProductCard>>('/catalog/products', {
-        params: { pageSize: 9 }
+        params: { pageSize: 20, ...filters }
       })).data
   })
 
-  const banners = bannersQuery.data ?? []
-  const categoryBanners = categoryBannersQuery.data ?? []
-
-  useEffect(() => {
-    if (banners.length <= 1) return
-    const t = setInterval(() => setSlide((s) => (s + 1) % banners.length), 5500)
-    return () => clearInterval(t)
-  }, [banners.length])
-
-  useEffect(() => {
-    setSlide(0)
-  }, [banners.length])
-
-  const activeBanner = banners[slide] ?? banners[0]
-  const motorCarBanner =
-    categoryBanners.find((b) => /motor\s*car/i.test(`${b.categoryName} ${b.bannerName ?? ''}`)) ??
-    categoryBanners.find((b) => /car/i.test(b.categoryName))
-  const motorBikeBanner =
-    categoryBanners.find((b) => /motor\s*bike|bike/i.test(`${b.categoryName} ${b.bannerName ?? ''}`))
+  const categoryBanners = (categoryBannersQuery.data ?? []).filter((b) => !!b.imageUrl)
 
   const addFromCard = async (product: CatalogProductCard, mode: 'cart' | 'buy') => {
+    if (!orderContext) return
     const detail = (
       await api.get<{
         id: string
@@ -74,6 +54,8 @@ export default function DistributorHomePage() {
           distributorPrice: number
           retailPrice: number
           inStock: boolean
+          gstPercent?: number | null
+          fedPercent?: number | null
         }[]
       }>(`/catalog/products/${product.id}`)
     ).data
@@ -94,7 +76,11 @@ export default function DistributorHomePage() {
         categoryName: detail.categoryName,
         imageUrl: detail.primaryImageUrl,
         packLabel: variant.typeName,
-        unitPrice: variant.distributorPrice || variant.retailPrice || product.displayPrice
+        unitPrice: isRetailer
+          ? variant.retailPrice || product.displayPrice
+          : variant.distributorPrice || variant.retailPrice || product.displayPrice,
+        gstPercent: variant.gstPercent != null ? Number(variant.gstPercent) : undefined,
+        fedPercent: variant.fedPercent != null ? Number(variant.fedPercent) : undefined
       },
       1
     )
@@ -102,81 +88,69 @@ export default function DistributorHomePage() {
     if (mode === 'buy') navigate('/cart')
   }
 
-  const heroHref = activeBanner?.productId
-    ? `/catalog/products/${activeBanner.productId}`
-    : undefined
-
   return (
     <div className="space-y-7 pb-8">
-      {/* Header banner carousel — image creatives from Super Admin */}
-      <section className="relative rounded-2xl overflow-hidden min-h-[200px] sm:min-h-[260px] lg:min-h-[320px] bg-[#0b1f4a] shadow-card">
-        {activeBanner?.imageUrl ? (
-          heroHref ? (
-            <Link to={heroHref} className="absolute inset-0 block">
-              <img
-                src={activeBanner.imageUrl}
-                alt={activeBanner.bannerName || activeBanner.productName || 'Promotion'}
-                className="h-full w-full object-cover"
-              />
-            </Link>
-          ) : (
-            <img
-              src={activeBanner.imageUrl}
-              alt={activeBanner.bannerName || activeBanner.productName || 'Promotion'}
-              className="absolute inset-0 h-full w-full object-cover"
-            />
-          )
-        ) : (
-          <div className="absolute inset-0 flex flex-col justify-center px-8 bg-gradient-to-r from-[#0b1f4a] via-[#123a7a] to-[#1a56b0]">
-            <p className="text-white/80 text-sm font-semibold">Header Banner</p>
-            <p className="text-white text-xl font-extrabold mt-1">
-              Upload header banners in My Shop (Super Admin)
-            </p>
+      {categoryBanners.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">Categories</h2>
+            <p className="text-xs text-suzuki-mute mt-0.5">Pick a category or filter the catalog below</p>
           </div>
-        )}
-
-        {banners.length > 1 && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-10">
-            {banners.map((b, i) => (
-              <button
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {categoryBanners.map((b) => (
+              <Link
                 key={b.id}
-                type="button"
-                aria-label={`Slide ${i + 1}`}
-                onClick={() => setSlide(i)}
-                className={`h-2.5 w-2.5 rounded-full transition-colors ${
-                  i === slide ? 'bg-white' : 'bg-white/45'
-                }`}
-              />
+                to={`/catalog/${categorySlug(b.categoryName || b.bannerName || 'all')}`}
+                className="group rounded-2xl overflow-hidden border border-suzuki-line bg-white shadow-card hover:shadow-md transition-shadow"
+              >
+                <div className="aspect-[16/10] bg-suzuki-mist overflow-hidden">
+                  <img
+                    src={b.imageUrl}
+                    alt={b.bannerName || b.categoryName}
+                    className="h-full w-full object-cover group-hover:scale-105 transition-transform"
+                  />
+                </div>
+                <div className="px-3 py-2.5 flex items-center justify-between gap-2">
+                  <p className="text-sm font-bold text-suzuki-navy truncate">
+                    {b.bannerName || b.categoryName}
+                  </p>
+                  <ArrowRight size={14} className="text-suzuki-mute shrink-0" />
+                </div>
+              </Link>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      {/* Lubricant for — category banners from Super Admin */}
-      <section>
-        <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy mb-4">Lubricant for</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <CategoryTile title="Motor Car" imageUrl={motorCarBanner?.imageUrl} to="/catalog/motor-car" />
-          <CategoryTile title="Motor Bike" imageUrl={motorBikeBanner?.imageUrl} to="/catalog/motor-bike" />
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">Catalog</h2>
+          <p className="text-xs text-suzuki-mute mt-0.5">
+            {isRetailer
+              ? 'Choose your order lane below, then add packs at retail price. Orders go to your distributor.'
+              : 'Choose source, delivery type, and supplier below — products for that lane appear here.'}
+          </p>
         </div>
-      </section>
 
-      {/* All Lubricant — published products */}
-      <section>
-        <div className="flex items-center justify-between mb-4 gap-3">
-          <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">All Lubricant</h2>
-          <Link to="/catalog/all" className="text-sm font-bold text-suzuki-blue hover:underline shrink-0">
-            View all
-          </Link>
-        </div>
+        <OrderLaneFilters compact />
+
         {productsQuery.isLoading ? (
           <p className="text-sm text-suzuki-mute">Loading products…</p>
+        ) : !orderContext ? (
+          <div className="rounded-xl border border-dashed border-suzuki-line bg-suzuki-mist/40 p-8 text-center">
+            <p className="text-sm text-suzuki-mute">
+              Select source, delivery type, and supplier above to load products.
+            </p>
+          </div>
         ) : (productsQuery.data?.items.length ?? 0) === 0 ? (
-          <p className="text-sm text-suzuki-mute">
-            No published products yet. Super Admin can add them under My Shop → Product List.
-          </p>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center space-y-1">
+            <p className="text-sm font-semibold text-amber-900">No products match this lane</p>
+            <p className="text-xs text-amber-800">
+              Change the filters above to try another combination. You do not need to clear and start over.
+            </p>
+          </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
             {(productsQuery.data?.items ?? []).map((p) => (
               <ProductCard
                 key={p.id}
@@ -189,39 +163,5 @@ export default function DistributorHomePage() {
         )}
       </section>
     </div>
-  )
-}
-
-function CategoryTile({
-  title,
-  imageUrl,
-  to
-}: {
-  title: string
-  imageUrl?: string | null
-  to: string
-}) {
-  return (
-    <Link
-      to={to}
-      className="group relative rounded-2xl overflow-hidden min-h-[170px] sm:min-h-[210px] border border-suzuki-line shadow-card bg-slate-900"
-    >
-      {imageUrl ? (
-        <img
-          src={imageUrl}
-          alt={title}
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-        />
-      ) : (
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-800 via-slate-700 to-sky-900" />
-      )}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/10 to-transparent" />
-      <div className="relative z-10 h-full min-h-[170px] sm:min-h-[210px] p-5 flex flex-col justify-between">
-        <div className="self-end rounded-md bg-white/90 p-1.5 text-suzuki-navy shadow-sm">
-          <ExternalLink size={15} />
-        </div>
-        <h3 className="text-2xl font-black text-white drop-shadow-sm">{title}</h3>
-      </div>
-    </Link>
   )
 }

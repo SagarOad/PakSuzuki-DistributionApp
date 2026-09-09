@@ -2,91 +2,114 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
-import { CreditCard, User, CalendarDays, Lock, ShoppingBasket } from 'lucide-react'
+import { ShoppingBasket, Wallet } from 'lucide-react'
 import { api } from '@/api/axiosClient'
-import { useCart } from '@/context/CartContext'
+import { useAuth } from '@/context/AuthContext'
+import { useCart, type OrderContext } from '@/context/CartContext'
+import type { CatalogProductDetail } from './catalogTypes'
 
-function onlyDigits(v: string) {
-  return v.replace(/\D/g, '')
-}
-
-function formatCardNumber(v: string) {
-  const d = onlyDigits(v).slice(0, 16)
-  return d.replace(/(\d{4})(?=\d)/g, '$1 ').trim()
-}
-
-function formatExpiry(v: string) {
-  const d = onlyDigits(v).slice(0, 4)
-  if (d.length <= 2) return d
-  return `${d.slice(0, 2)}/${d.slice(2)}`
-}
-
+/** Distributor: Haball placeholder until gateway is live. Retailer: place order to distributor. */
 export default function PaymentPage() {
   const navigate = useNavigate()
-  const { items, clear, originatingRetailerOrderId } = useCart()
-  const [cardNumber, setCardNumber] = useState('')
-  const [holder, setHolder] = useState('')
-  const [expiry, setExpiry] = useState('')
-  const [cvv, setCvv] = useState('')
+  const { role } = useAuth()
+  const { items, clear, originatingRetailerOrderId, orderContext, setOrderContext } = useCart()
+  const isRetailer = role === 'Retailer'
   const [error, setError] = useState<string | null>(null)
   const [placedOrderId, setPlacedOrderId] = useState<string | null>(null)
+  const [placedMessage, setPlacedMessage] = useState<string | null>(null)
+
+  const resolveLaneFromCart = async (): Promise<OrderContext> => {
+    const first = items[0]
+    if (!first) throw new Error('Cart is empty')
+
+    const detail = (await api.get<CatalogProductDetail>(`/catalog/products/${first.productId}`)).data
+    const source = detail.sourceCode?.trim()
+    const delivery = detail.deliveryTypeCode?.trim()
+    const supplier = detail.supplierCode?.trim()
+    if (!source || !delivery || !supplier) {
+      throw new Error('Product is missing source / delivery type / supplier. Check master catalog data.')
+    }
+
+    const next: OrderContext = {
+      vendorCode: orderContext?.vendorCode || 'PSMC',
+      vendorName: orderContext?.vendorName || 'Pak Suzuki Motor Company',
+      materialSourceCode: source,
+      deliveryTypeCode: delivery,
+      deliveryTypeName: detail.deliveryTypeName || delivery,
+      supplierCode: supplier,
+      supplierName: supplier
+    }
+
+    // Keep cart items; only correct the PO lane to match products.
+    setOrderContext(next, { clearCart: false })
+    return next
+  }
 
   const placeOrder = useMutation({
     mutationFn: async () => {
       if (items.length === 0) throw new Error('Cart is empty')
-      const body = {
-        items: items.map((i) => ({
-          productId: i.productId,
-          productVariantId: i.variantId || null,
-          quantity: i.quantity,
-          unit: i.unit || 'Piece'
-        })),
-        originatingRetailerOrderId: originatingRetailerOrderId || null
+
+      const itemsBody = items.map((i) => ({
+        productId: i.productId,
+        productVariantId: i.variantId || null,
+        quantity: i.quantity,
+        unit: i.unit || 'Carton'
+      }))
+
+      if (isRetailer) {
+        if (!orderContext) throw new Error('Start an order and choose source, delivery type, and supplier first.')
+        const { data } = await api.post<{ id: string; orderNumber?: string; message?: string }>('/orders', {
+          items: itemsBody,
+          vendorCode: orderContext.vendorCode,
+          materialSourceCode: orderContext.materialSourceCode,
+          deliveryTypeCode: orderContext.deliveryTypeCode,
+          deliveryTypeName: orderContext.deliveryTypeName,
+          supplierCode: orderContext.supplierCode
+        })
+        return data
       }
-      const { data } = await api.post<{ id: string }>('/orders/distributor-direct', body)
-      return data.id
+
+      // Manufacturer order: lane is taken from cart products (and origin order on API).
+      const lane = await resolveLaneFromCart()
+      const { data } = await api.post<{ id: string; orderNumber?: string; message?: string }>('/orders/distributor-direct', {
+        items: itemsBody,
+        originatingRetailerOrderId: originatingRetailerOrderId || null,
+        vendorCode: lane.vendorCode,
+        materialSourceCode: lane.materialSourceCode,
+        deliveryTypeCode: lane.deliveryTypeCode,
+        deliveryTypeName: lane.deliveryTypeName,
+        supplierCode: lane.supplierCode
+      })
+      return data
     },
-    onSuccess: (id) => {
+    onSuccess: (data) => {
       clear()
-      setPlacedOrderId(id)
+      setPlacedOrderId(data.id)
+      setPlacedMessage(
+        data.message ||
+          (isRetailer
+            ? 'Your order has been sent to your distributor. Track status in My Orders.'
+            : 'Your order to Pak Suzuki has been submitted. Track status in My Orders.')
+      )
     },
     onError: (e: unknown) => {
       const msg = (e as { response?: { data?: { detail?: string; title?: string } } })?.response?.data
-      setError(msg?.detail || msg?.title || 'Failed to place order.')
+      setError(msg?.detail || msg?.title || (e as Error)?.message || 'Failed to place order.')
     }
   })
 
   const onPay = () => {
     setError(null)
-    const digits = onlyDigits(cardNumber)
-    if (digits.length < 12) {
-      setError('Enter a valid card number.')
-      return
-    }
-    if (!holder.trim()) {
-      setError('Enter card holder name.')
-      return
-    }
-    if (onlyDigits(expiry).length < 4) {
-      setError('Enter a valid expiry date (MM/YY).')
-      return
-    }
-    if (onlyDigits(cvv).length < 3) {
-      setError('Enter a valid CVV.')
-      return
-    }
-    // Card UI is a placeholder until payment gateway is integrated.
-    // Order is created and queued for Pak Suzuki / SAP middleware.
     placeOrder.mutate()
   }
 
   if (items.length === 0 && !placedOrderId) {
     return (
       <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-10 text-center space-y-3">
-        <h1 className="text-xl font-extrabold text-suzuki-navy">Payment</h1>
+        <h1 className="text-xl font-extrabold text-suzuki-navy">{isRetailer ? 'Place order' : 'Payment'}</h1>
         <p className="text-sm text-suzuki-mute">Nothing to pay for.</p>
-        <button type="button" onClick={() => navigate('/')} className="text-sm font-bold text-suzuki-blue">
-          Go home
+        <button type="button" onClick={() => navigate('/order/start')} className="text-sm font-bold text-suzuki-blue">
+          Start order
         </button>
       </div>
     )
@@ -95,9 +118,22 @@ export default function PaymentPage() {
   return (
     <div className="pb-10 max-w-3xl mx-auto">
       <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 sm:p-8">
-        <h1 className="text-lg sm:text-xl font-extrabold text-suzuki-navy text-center mb-6">
-          Add A Credit/Debit Card For Making Payments.
+        <h1 className="text-lg sm:text-xl font-extrabold text-suzuki-navy text-center mb-2">
+          {isRetailer ? 'Place order to your distributor' : 'Pay with Haball'}
         </h1>
+        <p className="text-sm text-suzuki-mute text-center mb-6">
+          {isRetailer
+            ? 'This order is placed in packs and goes to your distributor for approval.'
+            : 'Haball payment gateway will be integrated here. For now, click below to submit the manufacturer order (no card entry).'}
+        </p>
+
+        {orderContext && (
+          <div className="mb-4 rounded-lg border border-suzuki-line bg-suzuki-mist/50 px-3 py-2 text-xs text-suzuki-navy">
+            <span className="font-bold">PO lane: </span>
+            {orderContext.materialSourceCode} · {orderContext.deliveryTypeCode}
+            {orderContext.deliveryTypeName ? ` (${orderContext.deliveryTypeName})` : ''} · {orderContext.supplierCode}
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 rounded-lg border border-suzuki-red/30 bg-red-50 px-3 py-2 text-sm text-suzuki-red">
@@ -105,65 +141,30 @@ export default function PaymentPage() {
           </div>
         )}
 
-        <div className="space-y-4">
-          <Field>
-            <CreditCard size={18} className="text-suzuki-red shrink-0" />
-            <input
-              value={cardNumber}
-              onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
-              placeholder="1234 1234 1234 1234"
-              inputMode="numeric"
-              autoComplete="cc-number"
-              className="flex-1 bg-transparent outline-none text-suzuki-navy font-semibold placeholder:text-suzuki-mute/70"
-            />
-          </Field>
-
-          <Field>
-            <User size={18} className="text-suzuki-red shrink-0" />
-            <input
-              value={holder}
-              onChange={(e) => setHolder(e.target.value)}
-              placeholder="Card Holder Name"
-              autoComplete="cc-name"
-              className="flex-1 bg-transparent outline-none text-suzuki-navy font-semibold placeholder:text-suzuki-mute/70"
-            />
-          </Field>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field>
-              <CalendarDays size={18} className="text-suzuki-red shrink-0" />
-              <input
-                value={expiry}
-                onChange={(e) => setExpiry(formatExpiry(e.target.value))}
-                placeholder="MM/YY"
-                inputMode="numeric"
-                autoComplete="cc-exp"
-                className="flex-1 bg-transparent outline-none text-suzuki-navy font-semibold placeholder:text-suzuki-mute/70"
-              />
-            </Field>
-            <Field>
-              <Lock size={18} className="text-suzuki-red shrink-0" />
-              <input
-                value={cvv}
-                onChange={(e) => setCvv(onlyDigits(e.target.value).slice(0, 4))}
-                placeholder="CVV"
-                inputMode="numeric"
-                autoComplete="cc-csc"
-                type="password"
-                className="flex-1 bg-transparent outline-none text-suzuki-navy font-semibold placeholder:text-suzuki-mute/70"
-              />
-            </Field>
+        {!isRetailer && (
+          <div className="rounded-xl border border-dashed border-suzuki-line bg-suzuki-mist/40 px-4 py-5 mb-4 flex items-start gap-3">
+            <Wallet className="text-suzuki-red shrink-0 mt-0.5" size={22} />
+            <div>
+              <p className="text-sm font-bold text-suzuki-navy">Haball (coming soon)</p>
+              <p className="text-xs text-suzuki-mute mt-1">
+                Real Haball checkout will replace this step. Until then, “Send payment request” places the order to Pak Suzuki.
+              </p>
+            </div>
           </div>
+        )}
 
-          <button
-            type="button"
-            disabled={placeOrder.isPending}
-            onClick={onPay}
-            className="w-full mt-2 rounded-xl bg-suzuki-red text-white font-extrabold py-3.5 hover:bg-red-700 disabled:opacity-60 transition-colors"
-          >
-            {placeOrder.isPending ? 'Processing…' : 'Pay Now'}
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={placeOrder.isPending}
+          onClick={onPay}
+          className="w-full rounded-xl bg-suzuki-red text-white font-extrabold py-3.5 hover:bg-red-700 disabled:opacity-60 transition-colors"
+        >
+          {placeOrder.isPending
+            ? 'Processing…'
+            : isRetailer
+              ? 'Place order'
+              : 'Send payment request (Haball)'}
+        </button>
       </div>
 
       {placedOrderId &&
@@ -182,8 +183,10 @@ export default function PaymentPage() {
                 Order Placed
               </h2>
               <p className="mt-3 text-sm text-suzuki-navy leading-relaxed">
-                Congratulations, your order is in under process please see your order tracking in my
-                orders tab.
+                {placedMessage ||
+                  (isRetailer
+                    ? 'Your order has been sent to your distributor. Track status in My Orders.'
+                    : 'Your order to Pak Suzuki has been submitted. Track status in My Orders.')}
               </p>
               <button
                 type="button"
@@ -196,14 +199,6 @@ export default function PaymentPage() {
           </div>,
           document.body
         )}
-    </div>
-  )
-}
-
-function Field({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-suzuki-line bg-white px-4 py-3.5">
-      {children}
     </div>
   )
 }

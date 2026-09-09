@@ -26,4 +26,5 @@ public class Product : EntityWithDomainEvents
     public ICollection<ProductPrice> PriceHistory { get; set; } = new List<ProductPrice>();
     public ICollection<ProductVariant> Variants { get; set; } = new List<ProductVariant>();
     public ICollection<ProductSectionImage> SectionImages { get; set; } = new List<ProductSectionImage>();
+    public ProductCatalogProfile? CatalogProfile { get; set; }
 }

@@ -4,9 +4,17 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { api } from '@/api/axiosClient'
 import { useAuthStore } from '@/context/authStore'
 import { SuzukiLogo, EcstarLogo } from '@/components/brand/Logos'
+import ImageUploadFields from '@/components/forms/ImageUploadFields'
+import ImageGallery from '@/components/ui/ImageGallery'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
 import axios from 'axios'
 
-interface RetailerProfile {
+interface ProfilePhotos {
+  profileImageUrl?: string | null
+  images?: { id: string; storageUrl: string; fileName: string }[]
+}
+
+interface RetailerProfile extends ProfilePhotos {
   id: string
   name: string
   mobileNumber: string
@@ -22,7 +30,7 @@ interface RetailerProfile {
   superAdminApprovalStatus: string
 }
 
-interface DistributorProfile {
+interface DistributorProfile extends ProfilePhotos {
   id: string
   name: string
   mobileNumber: string
@@ -57,6 +65,8 @@ export default function RegistrationCorrectionPage() {
   })
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [newProfileImage, setNewProfileImage] = useState<File | null>(null)
+  const [newBusinessImages, setNewBusinessImages] = useState<File[]>([])
 
   const profileQuery = useQuery({
     queryKey: ['correction-profile', role, profileId],
@@ -86,13 +96,23 @@ export default function RegistrationCorrectionPage() {
   const saveAndResubmit = useMutation({
     mutationFn: async () => {
       if (!profileId) throw new Error('Missing profile id')
-      if (isRetailer) {
-        await api.put(`/retailers/${profileId}`, form)
-        await api.post(`/retailers/resubmit/${profileId}`)
-      } else {
-        await api.put(`/distributors/${profileId}`, form)
-        await api.post(`/distributors/resubmit/${profileId}`)
+      const scope = isRetailer ? 'retailers' : 'distributors'
+
+      await api.put(`/${scope}/${profileId}`, form)
+
+      if (newProfileImage) {
+        const body = new FormData()
+        body.append('file', newProfileImage)
+        await api.post(`/${scope}/profile-image/${profileId}`, body)
       }
+
+      if (newBusinessImages.length > 0) {
+        const body = new FormData()
+        newBusinessImages.forEach((file) => body.append('files', file))
+        await api.post(`/${scope}/business-images/${profileId}`, body)
+      }
+
+      await api.post(`/${scope}/resubmit/${profileId}`)
     },
     onSuccess: () => {
       setMessage('Details updated and resubmitted for review. You will be signed out — login works again after approval.')
@@ -197,6 +217,44 @@ export default function RegistrationCorrectionPage() {
                   value={form.longitude}
                   onChange={(e) => setForm((f) => ({ ...f, longitude: Number(e.target.value) }))}
                   required
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-suzuki-line p-4 space-y-4">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-suzuki-mute mb-2">
+                  Photos you submitted
+                </div>
+                <div className="flex items-start gap-4">
+                  <PlaceholderImage
+                    src={profileQuery.data?.profileImageUrl}
+                    alt="Current profile photo"
+                    className="h-16 w-16 shrink-0 rounded-xl border border-suzuki-line bg-suzuki-mist"
+                    imgClassName="h-full w-full object-cover"
+                  />
+                  <div className="flex-1">
+                    <ImageGallery
+                      images={profileQuery.data?.images ?? []}
+                      emptyText="No shop photos on file."
+                      placeholders={3}
+                      className="grid-cols-3 sm:grid-cols-5"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-suzuki-line pt-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-suzuki-mute mb-3">
+                  Add clearer photos (optional)
+                </div>
+                <ImageUploadFields
+                  profileImage={newProfileImage}
+                  businessImages={newBusinessImages}
+                  onProfileChange={setNewProfileImage}
+                  onBusinessChange={setNewBusinessImages}
+                  businessHint="New shop photos are added to the ones above before your application is reviewed again."
+                  businessRequired={false}
                 />
               </div>
             </div>

@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Truck, Package, UserPlus, Users, ShoppingBasket,
-  CheckCircle2, XCircle, Search, Crosshair, ChevronRight
+  CheckCircle2, XCircle, ChevronRight
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { StatCard } from '@/components/ui/StatCard'
 import { StatsGraph } from '@/components/ui/StatsGraph'
+import DashboardCoverageMap from '@/components/maps/DashboardCoverageMap'
 import clsx from 'clsx'
 
 interface SuperAdminDash {
@@ -58,27 +59,7 @@ export default function SuperAdminDashboard() {
       {/* Bird Eye View */}
       <section className="flex flex-col min-h-[280px] sm:min-h-[360px] xl:min-h-0 xl:h-full">
         <h2 className="text-lg font-bold text-suzuki-navy mb-3 shrink-0">Bird Eye View</h2>
-        <div className="relative flex-1 rounded-2xl overflow-hidden border border-suzuki-line shadow-card bg-white min-h-[280px] sm:min-h-[360px] xl:min-h-[420px]">
-          <iframe
-            title="Pakistan coverage map"
-            className="absolute inset-0 w-full h-full border-0"
-            loading="lazy"
-            referrerPolicy="no-referrer-when-downgrade"
-            src="https://www.openstreetmap.org/export/embed.html?bbox=60.5%2C23.5%2C77.5%2C37.2&layer=mapnik&marker=30.3753%2C69.3451"
-          />
-          <div className="absolute top-4 left-4 right-4 max-w-sm">
-            <div className="flex items-center gap-2 bg-white/95 backdrop-blur rounded-xl shadow-card border border-white px-3 py-2.5">
-              <Search size={16} className="text-suzuki-mute shrink-0" />
-              <input
-                placeholder="Search"
-                className="flex-1 bg-transparent text-sm outline-none placeholder:text-suzuki-mute"
-              />
-              <button type="button" className="text-suzuki-blue p-1" aria-label="Current location">
-                <Crosshair size={16} />
-              </button>
-            </div>
-          </div>
-        </div>
+        <DashboardCoverageMap />
       </section>
 
       {/* Right column */}

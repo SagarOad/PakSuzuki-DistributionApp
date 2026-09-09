@@ -32,4 +32,14 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
+  .field {
+    @apply w-full rounded-lg border border-suzuki-line bg-white px-3 py-2.5 text-sm text-suzuki-navy outline-none;
+  }
+  .field:focus {
+    border-color: #7EB6E8;
+    box-shadow: 0 0 0 3px rgba(126, 182, 232, 0.25);
+  }
+  .field:disabled {
+    @apply bg-suzuki-mist text-suzuki-mute;
+  }
 }

@@ -20,6 +20,9 @@ public class Retailer : EntityWithDomainEvents
     public double Latitude { get; set; }
     public double Longitude { get; set; }
 
+    /// <summary>Optional profile / avatar photo URL (stored under wwwroot/uploads).</summary>
+    public string? ProfileImageUrl { get; set; }
+
     public Guid DistributorId { get; set; }
     public Distributor Distributor { get; set; } = default!;
 

@@ -3,11 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ShoppingBasket, CheckCircle2, XCircle, Clock, MapPin,
-  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft, ImageIcon
+  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { StatCard } from '@/components/ui/StatCard'
 import { ProfileChart, useChartPeriod } from '@/components/ui/ProfileChart'
+import ImageGallery from '@/components/ui/ImageGallery'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
+import { downloadExcel, fetchAllFromApi } from '@/utils/excelExport'
 import clsx from 'clsx'
 
 interface RetailerDetail {
@@ -18,6 +21,8 @@ interface RetailerDetail {
   mobileNumber: string
   email: string
   businessName: string
+  ntn: string
+  iban: string
   businessAddress: string
   latitude: number
   longitude: number
@@ -29,8 +34,11 @@ interface RetailerDetail {
   distributorRegionName: string
   distributorLatitude: number
   distributorLongitude: number
+  distributorProfileImageUrl?: string | null
   isActive: boolean
+  distributorApprovalStatus: string
   superAdminApprovalStatus: string
+  profileImageUrl?: string | null
   images: { id: string; storageUrl: string; fileName: string }[]
 }
 
@@ -77,6 +85,7 @@ export default function RetailerDetailPage() {
   const [tab, setTab] = useState<StatusTab>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [exporting, setExporting] = useState(false)
 
   const detailQuery = useQuery({
     queryKey: ['retailer-detail', id],
@@ -122,9 +131,45 @@ export default function RetailerDetailPage() {
     return items
   }, [ordersQuery.data, tab])
 
+  async function exportOrders() {
+    if (!id || !r) return
+    setExporting(true)
+    try {
+      const all = await fetchAllFromApi<OrderRow>('/orders', {
+        retailerId: id,
+        search: search || undefined
+      })
+      let rows = all
+      if (tab === 'pending') rows = rows.filter((o) => PENDING.includes(o.status))
+      if (tab === 'process') rows = rows.filter((o) => PROCESS.includes(o.status))
+      if (tab === 'completed') rows = rows.filter((o) => COMPLETED.includes(o.status))
+      if (tab === 'canceled') rows = rows.filter((o) => CANCELED.includes(o.status))
+
+      downloadExcel(
+        `retailer-${r.retailerCode || id}-orders-${tab}`,
+        [
+          { header: 'Order Date', value: (o) => new Date(o.createdAtUtc).toLocaleDateString('en-GB') },
+          { header: 'Order Number', value: (o) => o.orderNumber },
+          { header: 'Retailer Name', value: (o) => o.retailerName ?? r.name },
+          { header: 'Retailer Location', value: (o) => o.retailerLocation ?? r.businessAddress },
+          { header: 'Distributor Name', value: (o) => o.distributorName },
+          { header: 'Order Status', value: (o) => o.status }
+        ],
+        rows
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const distMapUrl =
     r && (r.distributorLatitude || r.distributorLongitude)
       ? `https://www.openstreetmap.org/?mlat=${r.distributorLatitude}&mlon=${r.distributorLongitude}#map=15/${r.distributorLatitude}/${r.distributorLongitude}`
+      : undefined
+
+  const shopMapUrl =
+    r && (r.latitude || r.longitude)
+      ? `https://www.openstreetmap.org/?mlat=${r.latitude}&mlon=${r.longitude}#map=15/${r.latitude}/${r.longitude}`
       : undefined
 
   const hint = useMemo(() => {
@@ -165,80 +210,145 @@ export default function RetailerDetailPage() {
         </h1>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_280px_1.1fr] gap-4">
-        <div className="grid grid-cols-2 gap-3 content-start">
-          <StatCard
-            tone="order-blue"
-            icon={<ShoppingBasket size={20} />}
-            value={stats?.totalOrders ?? '—'}
-            label="Total Orders"
-          />
-          <StatCard
-            tone="order-red"
-            icon={<Clock size={20} />}
-            value={stats?.inProcessOrders ?? '—'}
-            label="In Process"
-          />
-          <StatCard
-            tone="order-green"
-            icon={<CheckCircle2 size={20} />}
-            value={stats?.completedOrders ?? '—'}
-            label="Completed"
-          />
-          <StatCard
-            tone="order-gray"
-            icon={<XCircle size={20} />}
-            value={stats?.canceledOrders ?? '—'}
-            label="Canceled"
-          />
-        </div>
-
-        <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-4 space-y-3">
-          <h2 className="font-bold text-suzuki-navy">Dealing Distributor</h2>
-          <div>
-            <div className="text-lg font-extrabold text-suzuki-ink">{r.distributorName}</div>
-            <div className="mt-2 text-sm text-suzuki-mute space-y-1">
-              <div>{r.distributorEmail}</div>
-              <div>{r.distributorMobile}</div>
-              <div className="flex gap-1.5">
-                <MapPin size={14} className="shrink-0 mt-0.5" />
-                <span>{r.distributorRegionName}</span>
-              </div>
+      <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4">
+        <aside className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4 h-fit">
+          <div className="flex items-center gap-3">
+            <PlaceholderImage
+              src={r.profileImageUrl}
+              alt={r.name}
+              className="h-16 w-16 shrink-0 rounded-xl border border-suzuki-line bg-suzuki-mist"
+              imgClassName="h-full w-full object-cover"
+            />
+            <div>
+              <div className="text-lg font-extrabold text-suzuki-navy leading-tight">{r.name}</div>
+              <div className="text-xs text-suzuki-mute">{r.retailerCode}</div>
             </div>
           </div>
-          <div className="rounded-xl border border-suzuki-line overflow-hidden">
-            <div className="h-24 bg-suzuki-mist flex items-center justify-center">
-              <ImageIcon size={28} className="text-suzuki-mute" />
+
+          <dl className="space-y-2 text-sm">
+            <InfoRow label="CNIC" value={r.cnic} />
+            <InfoRow label="Contact Number" value={r.mobileNumber} />
+            <InfoRow label="Email" value={r.email} />
+            <InfoRow label="Business Name" value={r.businessName} />
+            <InfoRow label="NTN" value={r.ntn} />
+            <InfoRow label="IBAN" value={r.iban} />
+          </dl>
+
+          <div className="rounded-xl border border-suzuki-line p-3">
+            <div className="text-xs text-suzuki-mute flex gap-1.5">
+              <MapPin size={14} className="shrink-0 mt-0.5" />
+              <span>{r.businessAddress}</span>
             </div>
-            <div className="p-3">
-              <div className="text-xs text-suzuki-mute">{r.distributorBusinessAddress}</div>
+            {shopMapUrl && (
+              <a
+                href={shopMapUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-flex text-xs font-bold text-suzuki-blue hover:underline"
+              >
+                Go to Map
+              </a>
+            )}
+          </div>
+
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-suzuki-mute mb-2">
+              Shop photos ({r.images?.length ?? 0})
+            </div>
+            <ImageGallery
+              images={r.images ?? []}
+              emptyText="No shop photos were submitted with this registration."
+            />
+          </div>
+
+          <div
+            className={clsx(
+              'rounded-full text-center py-2.5 text-sm font-bold',
+              r.isActive ? 'bg-emerald-100 text-suzuki-ok' : 'bg-amber-100 text-amber-800'
+            )}
+          >
+            {r.isActive ? 'Active Account' : r.superAdminApprovalStatus}
+          </div>
+        </aside>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard
+              tone="order-blue"
+              icon={<ShoppingBasket size={20} />}
+              value={stats?.totalOrders ?? '—'}
+              label="Total Orders"
+            />
+            <StatCard
+              tone="order-red"
+              icon={<Clock size={20} />}
+              value={stats?.inProcessOrders ?? '—'}
+              label="In Process"
+            />
+            <StatCard
+              tone="order-green"
+              icon={<CheckCircle2 size={20} />}
+              value={stats?.completedOrders ?? '—'}
+              label="Completed"
+            />
+            <StatCard
+              tone="order-gray"
+              icon={<XCircle size={20} />}
+              value={stats?.canceledOrders ?? '—'}
+              label="Canceled"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
+            <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-4 space-y-3">
+              <h2 className="font-bold text-suzuki-navy">Dealing Distributor</h2>
+              <div className="flex items-center gap-3">
+                <PlaceholderImage
+                  src={r.distributorProfileImageUrl}
+                  alt={r.distributorName}
+                  className="h-12 w-12 shrink-0 rounded-lg border border-suzuki-line bg-suzuki-mist"
+                  imgClassName="h-full w-full object-cover"
+                />
+                <div>
+                  <div className="font-extrabold text-suzuki-ink leading-tight">{r.distributorName}</div>
+                  <div className="text-xs text-suzuki-mute">{r.distributorRegionName}</div>
+                </div>
+              </div>
+              <div className="text-sm text-suzuki-mute space-y-1">
+                <div className="break-all">{r.distributorEmail}</div>
+                <div>{r.distributorMobile}</div>
+                <div className="flex gap-1.5">
+                  <MapPin size={14} className="shrink-0 mt-0.5" />
+                  <span className="text-xs">{r.distributorBusinessAddress}</span>
+                </div>
+              </div>
               {distMapUrl && (
                 <a
                   href={distMapUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="mt-2 inline-flex text-xs font-bold text-suzuki-blue hover:underline"
+                  className="inline-flex text-xs font-bold text-suzuki-blue hover:underline"
                 >
                   Go to Map
                 </a>
               )}
+              <button
+                type="button"
+                onClick={() => navigate(`/distributors/${r.distributorId}`)}
+                className="w-full rounded-xl bg-suzuki-navy text-white text-sm font-bold py-2.5"
+              >
+                View Distributor
+              </button>
             </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => navigate(`/distributors/${r.distributorId}`)}
-            className="w-full rounded-xl bg-suzuki-navy text-white text-sm font-bold py-2.5"
-          >
-            View Distributor
-          </button>
-        </div>
 
-        <ProfileChart
-          title="Orders Stats"
-          points={chartPoints}
-          period={period}
-          onPeriodChange={setPeriod}
-        />
+            <ProfileChart
+              title="Orders Stats"
+              points={chartPoints}
+              period={period}
+              onPeriodChange={setPeriod}
+            />
+          </div>
+        </div>
       </div>
 
       <section className="space-y-3">
@@ -283,9 +393,11 @@ export default function RetailerDetailPage() {
               </div>
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-line px-3 py-2 text-xs font-semibold text-suzuki-blue"
+                disabled={exporting}
+                onClick={() => void exportOrders()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-line px-3 py-2 text-xs font-semibold text-suzuki-blue disabled:opacity-50"
               >
-                <FileSpreadsheet size={14} /> Export Excel
+                <FileSpreadsheet size={14} /> {exporting ? 'Exporting…' : 'Export Excel'}
               </button>
             </div>
           </div>
@@ -348,6 +460,15 @@ export default function RetailerDetailPage() {
           </div>
         </div>
       </section>
+    </div>
+  )
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-2">
+      <dt className="text-suzuki-mute w-32 shrink-0">{label}</dt>
+      <dd className="font-semibold text-suzuki-ink break-all">{value || '—'}</dd>
     </div>
   )
 }

@@ -2,6 +2,8 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Common.Models;
+using PakSuzuki.Application.Features.Orders;
+using PakSuzuki.Domain.Enums;
 
 namespace PakSuzuki.Application.Features.Orders.Queries;
 
@@ -21,10 +23,11 @@ public record GetOrdersQuery(
 
 public record OrderListDto(
     Guid Id, string OrderNumber, string Source, string? RetailerName, string? RetailerLocation,
-    string DistributorName, string Status, decimal GrandTotal, DateTime CreatedAtUtc,
+    string DistributorName, string Status, string StatusLabel, string? StatusCode, decimal GrandTotal, DateTime CreatedAtUtc,
     bool ThresholdReached, string ShippedBy,
     string? ProductSummary, string? CategorySummary, string? PacksSummary, decimal TotalUnits,
-    string? DistributorRemarks);
+    string? DistributorRemarks, string? RetailerRemarks, string? PakSuzukiRemarks,
+    string StatusColor, string? SapInvoiceNumber, string? MiddlewareStatus, string? SapMessage);
 
 public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedList<OrderListDto>>
 {
@@ -33,20 +36,31 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
 
     public async Task<PaginatedList<OrderListDto>> Handle(GetOrdersQuery request, CancellationToken ct)
     {
+        // Parse filters in memory — never use enum.ToString() inside IQueryable (EF cannot translate).
+        var hasSourceRaw = !string.IsNullOrWhiteSpace(request.SourceFilter);
+        var hasStatusRaw = !string.IsNullOrWhiteSpace(request.StatusFilter);
+        var sourceFilter = TryParseSource(request.SourceFilter);
+        var statusFilter = TryParseStatus(request.StatusFilter);
+
+        // Invalid filter values → empty page (do not silently drop the filter).
+        if ((hasSourceRaw && sourceFilter is null) || (hasStatusRaw && statusFilter is null))
+            return new PaginatedList<OrderListDto>([], 0, request.PageNumber, request.PageSize);
+
         var query = _context.Orders
             .AsNoTracking()
             .Where(o => request.DistributorIdScope == null || o.DistributorId == request.DistributorIdScope)
-            .Where(o => request.RetailerIdScope == null || o.RetailerId == request.RetailerIdScope)
-            .Where(o => request.StatusFilter == null || o.Status.ToString() == request.StatusFilter)
-            .Where(o => request.SourceFilter == null
-                || o.Source.ToString() == request.SourceFilter
-                || (request.SourceFilter == "RetailerOrder" && o.Source == Domain.Enums.OrderSourceType.RetailerOrder)
-                || (request.SourceFilter == "DistributorDirectOrder" && o.Source == Domain.Enums.OrderSourceType.DistributorDirectOrder))
+            .Where(o => request.RetailerIdScope == null || o.RetailerId == request.RetailerIdScope);
+
+        if (statusFilter is not null)
+            query = query.Where(o => o.Status == statusFilter.Value);
+
+        if (sourceFilter is not null)
+            query = query.Where(o => o.Source == sourceFilter.Value);
+
+        query = query
             .Where(o => !request.PakSuzukiWorkQueueOnly
-                || o.Source == Domain.Enums.OrderSourceType.DistributorDirectOrder
-                || (o.Source == Domain.Enums.OrderSourceType.RetailerOrder
-                    && o.Retailer != null
-                    && o.Retailer.IsEligibleForDirectShipToParty))
+                || o.Source == OrderSourceType.DistributorDirectOrder
+                || o.FulfillmentChoice == OrderFulfillmentChoice.PassToPakSuzuki)
             .Where(o => request.Search == null
                 || o.OrderNumber.Contains(request.Search)
                 || o.Distributor.Name.Contains(request.Search)
@@ -69,16 +83,30 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
             .ToListAsync(ct);
 
         var byId = orders.ToDictionary(o => o.Id);
+        var sapByOrder = await _context.PartsOrders.AsNoTracking()
+            .Where(q => pageIds.Contains(q.OrderId))
+            .ToDictionaryAsync(q => q.OrderId, ct);
+
+        var retailerViewer = request.RetailerIdScope is not null;
+        var viewer = OrderStatusDisplay.ResolveViewer(request.RetailerIdScope, request.DistributorIdScope);
+
         var items = pageIds
             .Where(id => byId.ContainsKey(id))
             .Select(id =>
             {
                 var o = byId[id];
-                var productNames = o.Items.Select(i => i.Product.Name).Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+                sapByOrder.TryGetValue(o.Id, out var sap);
+                var invoice = o.SapInvoiceNumber;
+                var productNames = o.Items
+                    .Select(i => i.Product?.Name)
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Cast<string>()
+                    .ToList();
                 var categories = o.Items
-                    .Select(i => i.Product.CategoryName)
+                    .Select(i => i.Product?.CategoryName)
                     .Where(c => !string.IsNullOrWhiteSpace(c))
                     .Distinct()
+                    .Cast<string>()
                     .ToList();
                 var packs = o.Items
                     .Select(i => i.VariantTypeName ?? i.RequestedUnit.ToString())
@@ -86,24 +114,53 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
                     .Distinct()
                     .ToList();
 
+                var statusCode = o.Status.ToString();
+                var sentBackByPakSuzuki = o.Status == OrderStatus.PendingDistributorApproval
+                    && o.PakSuzukiActionedAtUtc is not null;
+                var statusLabel = OrderStatusDisplay.Contextual(
+                    o.Status, viewer, o.ThresholdMet, sentBackByPakSuzuki, o.Source);
+                // Retailers get a friendly status in `status` so mobile UIs never show SAP wording.
+                var status = retailerViewer ? statusLabel : statusCode;
+
                 return new OrderListDto(
                     o.Id, o.OrderNumber, o.Source.ToString(),
                     o.Retailer?.Name,
                     o.Retailer?.BusinessAddress,
-                    o.Distributor.Name, o.Status.ToString(), o.GrandTotal, o.CreatedAtUtc,
-                    o.Retailer?.IsEligibleForDirectShipToParty ?? false,
-                    o.Source == Domain.Enums.OrderSourceType.DistributorDirectOrder
+                    o.Distributor?.Name ?? "Unknown", status, statusLabel, statusCode, o.GrandTotal, o.CreatedAtUtc,
+                    o.ThresholdMet,
+                    o.Source == OrderSourceType.DistributorDirectOrder
+                        || o.FulfillmentChoice == OrderFulfillmentChoice.PassToPakSuzuki
                         ? "Pak Suzuki"
-                        : (o.Retailer?.IsEligibleForDirectShipToParty == true ? "Pak Suzuki" : "Distributor"),
+                        : "Distributor",
                     productNames.Count == 0 ? null : string.Join(", ", productNames),
                     categories.Count == 0 ? null : string.Join(", ", categories!),
                     packs.Count == 0 ? null : string.Join(", ", packs),
                     o.Items.Sum(i => i.ApprovedQuantity ?? i.RequestedQuantity),
-                    o.DistributorRemarks
+                    o.DistributorRemarks,
+                    o.RetailerRemarks,
+                    o.PakSuzukiRemarks,
+                    SapOrderDisplay.StatusColor(o.Status, invoice, o.SapDeliveryNumber, sap?.SapMessage, sap?.SapTransferStatus),
+                    retailerViewer ? null : invoice,
+                    retailerViewer ? null : sap?.MiddlewareStatus,
+                    retailerViewer ? null : sap?.SapMessage
                 );
             })
             .ToList();
 
         return new PaginatedList<OrderListDto>(items, totalCount, request.PageNumber, request.PageSize);
+    }
+
+    private static OrderSourceType? TryParseSource(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (raw is "0" or "RetailerOrder") return OrderSourceType.RetailerOrder;
+        if (raw is "1" or "DistributorDirectOrder") return OrderSourceType.DistributorDirectOrder;
+        return Enum.TryParse<OrderSourceType>(raw, ignoreCase: true, out var parsed) ? parsed : null;
+    }
+
+    private static OrderStatus? TryParseStatus(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        return Enum.TryParse<OrderStatus>(raw, ignoreCase: true, out var parsed) ? parsed : null;
     }
 }

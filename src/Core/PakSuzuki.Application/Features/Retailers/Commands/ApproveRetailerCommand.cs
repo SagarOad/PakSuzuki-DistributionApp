@@ -29,6 +29,7 @@ public class ApproveRetailerCommandHandler : IRequestHandler<ApproveRetailerComm
     private readonly ICurrentUserService _currentUser;
     private readonly IIdentityService _identity;
     private readonly IEmailNotificationService _email;
+    private readonly IAppNotificationService _notifications;
     private readonly ILogger<ApproveRetailerCommandHandler> _logger;
 
     public ApproveRetailerCommandHandler(
@@ -36,12 +37,14 @@ public class ApproveRetailerCommandHandler : IRequestHandler<ApproveRetailerComm
         ICurrentUserService currentUser,
         IIdentityService identity,
         IEmailNotificationService email,
+        IAppNotificationService notifications,
         ILogger<ApproveRetailerCommandHandler> logger)
     {
         _context = context;
         _currentUser = currentUser;
         _identity = identity;
         _email = email;
+        _notifications = notifications;
         _logger = logger;
     }
 
@@ -75,10 +78,32 @@ public class ApproveRetailerCommandHandler : IRequestHandler<ApproveRetailerComm
             retailer.IsActive = request.Decision == ApprovalStatus.Approved;
             var loginAllowed = request.Decision is ApprovalStatus.Approved or ApprovalStatus.SentBackForCorrection;
             await _identity.SetUserActiveAsync(retailer.ApplicationUserId, loginAllowed, ct);
+            if (request.Decision == ApprovalStatus.Approved)
+                await _identity.TouchLastLoginAsync(retailer.ApplicationUserId, ct);
         }
 
         retailer.ApprovalRemarks = request.Remarks;
         await _context.SaveChangesAsync(ct);
+
+        await _notifications.NotifyUserAsync(
+            retailer.ApplicationUserId,
+            "Registration update",
+            $"Your retailer registration was marked as {request.Decision}.",
+            NotificationCategories.Registration,
+            "/settings",
+            retailer.Id,
+            ct);
+
+        if (request.ApprovingAs == Roles.Distributor && request.Decision == ApprovalStatus.Approved)
+        {
+            await _notifications.NotifyStaffAsync(
+                "Retailer awaiting final approval",
+                $"{retailer.Name} was approved by their distributor and needs Super Admin review.",
+                NotificationCategories.Registration,
+                $"/retailers/{retailer.Id}",
+                retailer.Id,
+                ct);
+        }
 
         var shouldNotify = request.ApprovingAs == Roles.Distributor
             ? request.Decision is ApprovalStatus.Rejected or ApprovalStatus.SentBackForCorrection

@@ -1,7 +1,9 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { Minus, Plus, Trash2 } from 'lucide-react'
 import { useCart } from '@/context/CartContext'
+import { useOrderTaxEstimate } from '@/hooks/useOrderTaxEstimate'
 import { ProductTitle } from './catalogTypes'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
 
 function formatRs(n: number) {
   return `Rs.${Number(n || 0).toLocaleString('en-PK')}`
@@ -13,7 +15,9 @@ function formatCartDate(d = new Date()) {
 }
 
 export default function CartPage() {
-  const { items, itemCount, subTotal, setQuantity, removeItem, originatingRetailerOrderId } = useCart()
+  const { items, itemCount, setQuantity, removeItem, originatingRetailerOrderId } = useCart()
+  const { subTotal, gstPercent, gstAmount, fedAmount, whtPercent, whtAmount, estimatedTotal } =
+    useOrderTaxEstimate(items)
   const navigate = useNavigate()
 
   if (items.length === 0) {
@@ -21,7 +25,7 @@ export default function CartPage() {
       <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-10 text-center space-y-3">
         <h1 className="text-2xl font-extrabold text-suzuki-navy">Cart (00)</h1>
         <p className="text-sm text-suzuki-mute">Your cart is empty.</p>
-        <Link to="/" className="inline-flex text-sm font-bold text-suzuki-blue hover:underline">
+        <Link to="/order/start" className="inline-flex text-sm font-bold text-suzuki-blue hover:underline">
           Browse lubricants
         </Link>
       </div>
@@ -41,7 +45,7 @@ export default function CartPage() {
           <span className="font-extrabold">Origin: retailer order. </span>
           This will place a normal distributor → manufacturer order linked to that retailer order
           (<span className="font-mono text-xs"> ({originatingRetailerOrderId.slice(0, 8)}…)</span>.
-          Edit quantities below, then continue to checkout.
+          Edit quantities below, then review and place your order.
         </div>
       )}
 
@@ -64,11 +68,12 @@ export default function CartPage() {
               className="px-5 sm:px-6 py-5 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 items-center"
             >
               <div className="flex gap-4 min-w-0">
-                <div className="h-[72px] w-[72px] rounded-xl bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center">
-                  {item.imageUrl ? (
-                    <img src={item.imageUrl} alt="" className="h-full w-full object-contain p-1" />
-                  ) : null}
-                </div>
+                <PlaceholderImage
+                  src={item.imageUrl}
+                  alt=""
+                  className="h-[72px] w-[72px] rounded-xl bg-slate-100 shrink-0"
+                  imgClassName="h-full w-full object-contain p-1"
+                />
                 <div className="min-w-0 flex-1">
                   <Link
                     to={`/catalog/products/${item.productId}`}
@@ -129,16 +134,36 @@ export default function CartPage() {
         </div>
 
         <div className="px-5 sm:px-6 py-5 border-t border-suzuki-line flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <p className="text-lg font-extrabold text-suzuki-navy">
-            Total Amount:{' '}
-            <span className="text-suzuki-red">{formatRs(subTotal)}</span>
-          </p>
+          <div className="space-y-1 text-sm min-w-[240px]">
+            <p className="font-bold text-suzuki-navy flex justify-between gap-6">
+              <span>Subtotal</span>
+              <span className="text-suzuki-red">{formatRs(subTotal)}</span>
+            </p>
+            <p className="font-semibold text-suzuki-mute flex justify-between gap-6">
+              <span>GST TAX ({gstPercent}%)</span>
+              <span className="text-suzuki-navy">{formatRs(gstAmount)}</span>
+            </p>
+            {fedAmount > 0 && (
+              <p className="font-semibold text-suzuki-mute flex justify-between gap-6">
+                <span>FED</span>
+                <span className="text-suzuki-navy">{formatRs(fedAmount)}</span>
+              </p>
+            )}
+            <p className="font-semibold text-suzuki-mute flex justify-between gap-6">
+              <span>WHT ({whtPercent}%)</span>
+              <span className="text-suzuki-navy">{formatRs(whtAmount)}</span>
+            </p>
+            <p className="text-lg font-extrabold text-suzuki-navy flex justify-between gap-6 pt-1">
+              <span>Total Amount</span>
+              <span className="text-suzuki-red">{formatRs(estimatedTotal)}</span>
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => navigate('/checkout/summary')}
             className="rounded-xl bg-suzuki-red text-white font-extrabold px-10 py-3.5 hover:bg-red-700 transition-colors"
           >
-            Pay Now
+            Review & Continue
           </button>
         </div>
       </div>

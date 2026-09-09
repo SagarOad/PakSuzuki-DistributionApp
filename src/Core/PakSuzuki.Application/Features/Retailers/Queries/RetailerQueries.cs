@@ -12,7 +12,7 @@ public record RetailerListDto(
     string MobileNumber, string Email, string BusinessAddress, string DistributorName,
     string RegionName,
     string DistributorApprovalStatus, string SuperAdminApprovalStatus,
-    bool IsActive, bool IsBlocked, DateTime CreatedAtUtc);
+    bool IsActive, bool IsBlocked, DateTime CreatedAtUtc, string? ProfileImageUrl);
 
 // DistributorScope, when set, restricts results to that distributor's own retailers
 // (controller populates from ICurrentUserService, never trusts client-supplied scope).
@@ -39,7 +39,7 @@ public class GetRetailersQueryHandler : IRequestHandler<GetRetailersQuery, Pagin
                 r.MobileNumber, r.Email, r.BusinessAddress, r.Distributor.Name,
                 r.Distributor.Region.Name,
                 r.DistributorApprovalStatus.ToString(), r.SuperAdminApprovalStatus.ToString(),
-                r.IsActive, r.IsBlocked, r.CreatedAtUtc));
+                r.IsActive, r.IsBlocked, r.CreatedAtUtc, r.ProfileImageUrl));
 
         return await PaginatedList<RetailerListDto>.CreateAsync(query, request.PageNumber, request.PageSize);
     }
@@ -50,7 +50,8 @@ public class GetRetailersQueryHandler : IRequestHandler<GetRetailersQuery, Pagin
 public record RetailerPendingDto(
     Guid Id, string Name, string BusinessName, string MobileNumber, string Email,
     string BusinessAddress, string DistributorName,
-    string DistributorApprovalStatus, string SuperAdminApprovalStatus, DateTime CreatedAtUtc);
+    string DistributorApprovalStatus, string SuperAdminApprovalStatus, DateTime CreatedAtUtc,
+    string? ProfileImageUrl, int PhotoCount);
 
 // ForSuperAdmin=true -> retailers already approved by their distributor, awaiting PSMCL
 // final approval. ForSuperAdmin=false -> retailers awaiting their own distributor's review
@@ -86,7 +87,8 @@ public class GetPendingRetailersQueryHandler : IRequestHandler<GetPendingRetaile
             .Select(r => new RetailerPendingDto(
                 r.Id, r.Name, r.BusinessName, r.MobileNumber, r.Email,
                 r.BusinessAddress, r.Distributor.Name,
-                r.DistributorApprovalStatus.ToString(), r.SuperAdminApprovalStatus.ToString(), r.CreatedAtUtc));
+                r.DistributorApprovalStatus.ToString(), r.SuperAdminApprovalStatus.ToString(), r.CreatedAtUtc,
+                r.ProfileImageUrl, r.BusinessImages.Count));
 
         return await PaginatedList<RetailerPendingDto>.CreateAsync(projected, request.PageNumber, request.PageSize);
     }
@@ -99,10 +101,11 @@ public record RetailerDetailDto(
     string BusinessName, string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude,
     Guid DistributorId, string DistributorName, string DistributorEmail, string DistributorMobile,
     string DistributorBusinessAddress, string DistributorRegionName, double DistributorLatitude, double DistributorLongitude,
+    string? DistributorProfileImageUrl,
     string DistributorApprovalStatus, string SuperAdminApprovalStatus,
     string? ApprovalRemarks, bool IsActive, bool IsBlocked, DateTime? BlockedAtUtc, DateTime? LastOrderAtUtc,
     bool IsEligibleForDirectShipToParty, string? SapBusinessPartnerCode, DateTime CreatedAtUtc,
-    List<RetailerImageDto> Images);
+    string? ProfileImageUrl, List<RetailerImageDto> Images);
 
 public record GetRetailerByIdQuery(Guid Id, Guid? DistributorScope) : IRequest<RetailerDetailDto>;
 
@@ -128,10 +131,11 @@ public class GetRetailerByIdQueryHandler : IRequestHandler<GetRetailerByIdQuery,
             retailer.Email, retailer.BusinessName, retailer.Ntn, retailer.Iban, retailer.BusinessAddress,
             retailer.Latitude, retailer.Longitude, retailer.DistributorId, d.Name,
             d.Email, d.MobileNumber, d.BusinessAddress, d.Region.Name, d.Latitude, d.Longitude,
+            d.ProfileImageUrl,
             retailer.DistributorApprovalStatus.ToString(), retailer.SuperAdminApprovalStatus.ToString(),
             retailer.ApprovalRemarks, retailer.IsActive, retailer.IsBlocked, retailer.BlockedAtUtc,
             retailer.LastOrderAtUtc, retailer.IsEligibleForDirectShipToParty, retailer.SapBusinessPartnerCode,
-            retailer.CreatedAtUtc,
+            retailer.CreatedAtUtc, retailer.ProfileImageUrl,
             retailer.BusinessImages.Select(i => new RetailerImageDto(i.Id, i.StorageUrl, i.FileName)).ToList());
     }
 }

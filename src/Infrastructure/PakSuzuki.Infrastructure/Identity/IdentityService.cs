@@ -49,8 +49,11 @@ public class IdentityService : IIdentityService
 
         // Sent-back accounts may be inactive for normal use but must still sign in to correct + resubmit.
         var sentBack = await IsSentBackForCorrectionAsync(user, ct);
+        if (!sentBack)
+            await EnforceInactivityDeactivationAsync(user, ct);
+
         if (!user.IsActive && !sentBack)
-            throw new ConflictException("This account has been deactivated or is not yet activated.");
+            throw await BuildInactiveLoginExceptionAsync(user, ct);
 
         await EnsureRegistrationAllowsLoginAsync(user, ct);
         return await IssueTokensAsync(user, ct);
@@ -63,18 +66,68 @@ public class IdentityService : IIdentityService
         var requiresApproval = role is Roles.Distributor or Roles.Retailer;
         var user = new ApplicationUser
         {
-            UserName = userName,
-            Email = email,
+            UserName = userName.Trim(),
+            Email = email.Trim(),
             EmailConfirmed = true,
             IsActive = !requiresApproval
         };
         var result = await _userManager.CreateAsync(user, password);
 
         if (!result.Succeeded)
-            throw new InvalidOperationException(string.Join("; ", result.Errors.Select(e => e.Description)));
+        {
+            var duplicate = result.Errors.Any(e =>
+                e.Code is "DuplicateUserName" or "DuplicateEmail");
+            if (duplicate)
+                throw new ConflictException(
+                    $"Email '{email.Trim()}' is already registered. Sign in, or use a different email.");
+
+            throw new ConflictException(string.Join("; ", result.Errors.Select(e => e.Description)));
+        }
 
         await _userManager.AddToRoleAsync(user, role);
         return user.Id;
+    }
+
+    public async Task<Guid> CreateRegistrationUserAsync(
+        string email, string password, string role, CancellationToken ct = default)
+    {
+        var normalized = email.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ConflictException("email is required.");
+
+        // Clean up orphan Identity users left when a prior register created AspNetUsers
+        // but failed before saving the Distributor/Retailer row.
+        var existing = await _userManager.FindByEmailAsync(normalized)
+            ?? await _userManager.FindByNameAsync(normalized);
+
+        if (existing is not null)
+        {
+            var linkedToDistributor = await _dbContext.Distributors
+                .AnyAsync(d => d.ApplicationUserId == existing.Id, ct);
+            var linkedToRetailer = await _dbContext.Retailers
+                .AnyAsync(r => r.ApplicationUserId == existing.Id, ct);
+
+            if (linkedToDistributor || linkedToRetailer)
+            {
+                var kind = linkedToDistributor ? "distributor" : "retailer";
+                throw new ConflictException(
+                    $"Email '{normalized}' is already registered as a {kind}. Sign in, or use a different email.");
+            }
+
+            _logger.LogWarning(
+                "Removing orphan AspNetUser {UserId} ({Email}) left by a failed registration attempt.",
+                existing.Id, existing.Email);
+            await _userManager.DeleteAsync(existing);
+        }
+
+        return await CreateUserAsync(normalized, normalized, password, role, ct);
+    }
+
+    public async Task DeleteUserAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString());
+        if (user is null) return;
+        await _userManager.DeleteAsync(user);
     }
 
     public async Task SetUserActiveAsync(Guid userId, bool isActive, CancellationToken ct = default)
@@ -82,6 +135,14 @@ public class IdentityService : IIdentityService
         var user = await _userManager.FindByIdAsync(userId.ToString())
             ?? throw new NotFoundException(nameof(ApplicationUser), userId);
         user.IsActive = isActive;
+        await _userManager.UpdateAsync(user);
+    }
+
+    public async Task TouchLastLoginAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString())
+            ?? throw new NotFoundException(nameof(ApplicationUser), userId);
+        user.LastLoginAtUtc = DateTime.UtcNow;
         await _userManager.UpdateAsync(user);
     }
 
@@ -94,8 +155,11 @@ public class IdentityService : IIdentityService
             throw new UnauthorizedAccessException("Refresh token expired.");
 
         var sentBack = await IsSentBackForCorrectionAsync(user, ct);
+        if (!sentBack)
+            await EnforceInactivityDeactivationAsync(user, ct);
+
         if (!user.IsActive && !sentBack)
-            throw new ConflictException("This account has been deactivated or is not yet activated.");
+            throw await BuildInactiveLoginExceptionAsync(user, ct);
 
         await EnsureRegistrationAllowsLoginAsync(user, ct);
         return await IssueTokensAsync(user, ct);
@@ -203,17 +267,94 @@ public class IdentityService : IIdentityService
 
     private async Task<bool> IsSentBackForCorrectionAsync(ApplicationUser user, CancellationToken ct)
     {
-        var retailer = await _dbContext.Retailers.AsNoTracking()
-            .FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id, ct);
+        var retailer = await _dbContext.Retailers.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id && !r.IsDeleted, ct);
         if (retailer != null)
         {
             return retailer.DistributorApprovalStatus == ApprovalStatus.SentBackForCorrection
                 || retailer.SuperAdminApprovalStatus == ApprovalStatus.SentBackForCorrection;
         }
 
-        var distributor = await _dbContext.Distributors.AsNoTracking()
-            .FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id, ct);
+        var distributor = await _dbContext.Distributors.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id && !d.IsDeleted, ct);
         return distributor?.ApprovalStatus == ApprovalStatus.SentBackForCorrection;
+    }
+
+    private const int InactivityDeactivateDays = 45;
+    private const string DeactivatedMessage =
+        "Your account has been deactivated. Please contact Super Admin to reactivate.";
+
+    /// <summary>
+    /// Approved distributor/retailer with no successful login for 45+ days → deactivate.
+    /// </summary>
+    private async Task EnforceInactivityDeactivationAsync(ApplicationUser user, CancellationToken ct)
+    {
+        if (!user.IsActive) return;
+
+        var retailer = await _dbContext.Retailers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id && !r.IsDeleted, ct);
+        if (retailer != null)
+        {
+            if (retailer.DistributorApprovalStatus != ApprovalStatus.Approved
+                || retailer.SuperAdminApprovalStatus != ApprovalStatus.Approved
+                || !retailer.IsActive)
+                return;
+
+            var baseline = user.LastLoginAtUtc ?? retailer.CreatedAtUtc;
+            if ((DateTime.UtcNow - baseline).TotalDays <= InactivityDeactivateDays)
+                return;
+
+            retailer.IsActive = false;
+            user.IsActive = false;
+            await _userManager.UpdateAsync(user);
+            await _dbContext.SaveChangesAsync(ct);
+            throw new ConflictException(DeactivatedMessage);
+        }
+
+        var distributor = await _dbContext.Distributors.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id && !d.IsDeleted, ct);
+        if (distributor == null) return;
+
+        if (distributor.ApprovalStatus != ApprovalStatus.Approved || !distributor.IsActive)
+            return;
+
+        var distBaseline = user.LastLoginAtUtc ?? distributor.ApprovedAtUtc ?? distributor.CreatedAtUtc;
+        if ((DateTime.UtcNow - distBaseline).TotalDays <= InactivityDeactivateDays)
+            return;
+
+        distributor.IsActive = false;
+        user.IsActive = false;
+        await _userManager.UpdateAsync(user);
+        await _dbContext.SaveChangesAsync(ct);
+        throw new ConflictException(DeactivatedMessage);
+    }
+
+    private async Task<Exception> BuildInactiveLoginExceptionAsync(ApplicationUser user, CancellationToken ct)
+    {
+        var retailer = await _dbContext.Retailers.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id, ct);
+        if (retailer != null)
+        {
+            if (retailer.IsDeleted)
+                return new ConflictException(DeactivatedMessage);
+            if (retailer.DistributorApprovalStatus == ApprovalStatus.Approved
+                && retailer.SuperAdminApprovalStatus == ApprovalStatus.Approved)
+                return new ConflictException(DeactivatedMessage);
+            return new ConflictException("This account is not yet activated.");
+        }
+
+        var distributor = await _dbContext.Distributors.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id, ct);
+        if (distributor != null)
+        {
+            if (distributor.IsDeleted)
+                return new ConflictException(DeactivatedMessage);
+            if (distributor.ApprovalStatus == ApprovalStatus.Approved)
+                return new ConflictException(DeactivatedMessage);
+            return new ConflictException("This account is not yet activated.");
+        }
+
+        return new ConflictException(DeactivatedMessage);
     }
 
     /// <summary>
@@ -222,11 +363,17 @@ public class IdentityService : IIdentityService
     /// </summary>
     private async Task EnsureRegistrationAllowsLoginAsync(ApplicationUser user, CancellationToken ct)
     {
-        var retailer = await _dbContext.Retailers.FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id, ct);
+        var retailer = await _dbContext.Retailers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id, ct);
         if (retailer != null)
         {
-            if (retailer.IsBlocked)
-                throw new ConflictException("Your retailer account is blocked due to inactivity. Contact your distributor.");
+            if (retailer.IsDeleted)
+                throw new ConflictException(DeactivatedMessage);
+
+            if (retailer.IsBlocked || (retailer.DistributorApprovalStatus == ApprovalStatus.Approved
+                    && retailer.SuperAdminApprovalStatus == ApprovalStatus.Approved
+                    && !retailer.IsActive))
+                throw new ConflictException(DeactivatedMessage);
 
             if (retailer.DistributorApprovalStatus == ApprovalStatus.Rejected)
                 throw new ConflictException("Your retailer registration was rejected by the distributor.");
@@ -242,23 +389,30 @@ public class IdentityService : IIdentityService
             if (retailer.DistributorApprovalStatus != ApprovalStatus.Approved)
                 throw new ConflictException("Your retailer registration is pending distributor approval. You can sign in after both distributor and Pak Suzuki approve your account.");
 
-            if (retailer.SuperAdminApprovalStatus != ApprovalStatus.Approved || !retailer.IsActive)
+            if (retailer.SuperAdminApprovalStatus != ApprovalStatus.Approved)
                 throw new ConflictException("Your retailer registration is pending Pak Suzuki (Super Admin) approval. You can sign in once final approval is complete.");
 
             return;
         }
 
-        var distributor = await _dbContext.Distributors.FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id, ct);
+        var distributor = await _dbContext.Distributors.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id, ct);
         if (distributor != null)
         {
+            if (distributor.IsDeleted)
+                throw new ConflictException(DeactivatedMessage);
+
             if (distributor.ApprovalStatus == ApprovalStatus.Rejected)
                 throw new ConflictException("Your distributor registration was rejected.");
 
             if (distributor.ApprovalStatus == ApprovalStatus.SentBackForCorrection)
                 return; // allowed to login and resubmit
 
-            if (distributor.ApprovalStatus != ApprovalStatus.Approved || !distributor.IsActive)
+            if (distributor.ApprovalStatus != ApprovalStatus.Approved)
                 throw new ConflictException("Your distributor registration is pending Pak Suzuki approval. You can sign in once approved.");
+
+            if (!distributor.IsActive)
+                throw new ConflictException(DeactivatedMessage);
         }
     }
 
@@ -273,7 +427,8 @@ public class IdentityService : IIdentityService
         string? registrationStatus = null;
         Guid? profileId = null;
 
-        var distributor = await _dbContext.Distributors.FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id, ct);
+        var distributor = await _dbContext.Distributors.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(d => d.ApplicationUserId == user.Id && !d.IsDeleted, ct);
         if (distributor != null)
         {
             extraClaims["distributorId"] = distributor.Id.ToString();
@@ -286,7 +441,8 @@ public class IdentityService : IIdentityService
             }
         }
 
-        var retailer = await _dbContext.Retailers.FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id, ct);
+        var retailer = await _dbContext.Retailers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(r => r.ApplicationUserId == user.Id && !r.IsDeleted, ct);
         if (retailer != null)
         {
             extraClaims["retailerId"] = retailer.Id.ToString();
@@ -318,11 +474,25 @@ public class IdentityService : IIdentityService
 
         user.RefreshToken = refreshToken;
         user.RefreshTokenExpiryUtc = DateTime.UtcNow.AddDays(refreshDays);
+        user.LastLoginAtUtc = DateTime.UtcNow;
         await _userManager.UpdateAsync(user);
 
         return new LoginResult(
             token, refreshToken, user.UserName!, role, user.Id,
             DateTime.UtcNow.AddMinutes(expiryMinutes),
             requiresCorrection, remarks, registrationStatus, profileId);
+    }
+
+    public async Task<IReadOnlyList<Guid>> GetUserIdsInRolesAsync(IEnumerable<string> roles, CancellationToken ct = default)
+    {
+        var result = new HashSet<Guid>();
+        foreach (var role in roles.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var users = await _userManager.GetUsersInRoleAsync(role);
+            foreach (var u in users.Where(x => x.IsActive))
+                result.Add(u.Id);
+        }
+
+        return result.ToList();
     }
 }

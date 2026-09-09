@@ -4,6 +4,7 @@ using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Features.Retailers.Commands;
 using PakSuzuki.Application.Features.Retailers.Queries;
 using PakSuzuki.Domain.Enums;
+using PakSuzuki.WebApi.Common;
 
 namespace PakSuzuki.WebApi.Controllers;
 
@@ -12,58 +13,36 @@ public class RetailersController : BaseApiController
     private readonly ICurrentUserService _currentUser;
     public RetailersController(ICurrentUserService currentUser) => _currentUser = currentUser;
 
+    /// <summary>
+    /// Retailer sign-up (mobile + web). Sent as multipart/form-data because the applicant uploads real
+    /// photos: an optional profile photo (<c>profileImage</c>) and at least one shop photo (<c>businessImages</c>).
+    /// Omit distributorId to auto-assign the nearest approved distributor from lat/long.
+    /// </summary>
     [HttpPost("register")]
     [AllowAnonymous]
-    [Consumes("application/json")]
-    public async Task<IActionResult> Register([FromBody] RegisterRetailerRequest request)
+    [RequestSizeLimit(50_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> Register([FromForm] RegisterRetailerRequest request)
     {
+        var imageErrors = ImageUploadRules.Validate(
+            request.ProfileImage, request.BusinessImages, businessImagesRequired: true);
+        if (imageErrors.Count > 0) return ValidationProblem(imageErrors);
+
         var result = await Mediator.Send(new RegisterRetailerCommand(
             request.Name, request.Cnic, request.MobileNumber, request.Email, request.Password,
             request.BusinessName, request.Ntn, request.Iban, request.BusinessAddress,
-            request.Latitude, request.Longitude, request.DistributorId, request.BusinessImageUrls));
+            request.Latitude, request.Longitude, request.DistributorId,
+            ImageUploadRules.ToUploadedImage(request.ProfileImage),
+            ImageUploadRules.ToUploadedImages(request.BusinessImages)));
+
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, new
         {
             id = result.Id,
             distributorId = result.DistributorId,
             distributorName = result.DistributorName,
             distanceKm = result.DistanceKm,
-            message = "Registered and assigned to nearest/selected distributor. Upload business images via POST /api/retailers/business-images/{id}, then wait for distributor + Super Admin approval.",
-            nextStep = $"POST /api/retailers/business-images/{result.Id}"
-        });
-    }
-
-    /// <summary>
-    /// Register retailer with business images in one multipart request (mobile-friendly).
-    /// Form fields match JSON register; files field name: files.
-    /// Omit distributorId to auto-assign the nearest approved distributor from lat/long.
-    /// </summary>
-    [HttpPost("register-with-images")]
-    [AllowAnonymous]
-    [RequestSizeLimit(50_000_000)]
-    [Consumes("multipart/form-data")]
-    public async Task<IActionResult> RegisterWithImages(
-        [FromForm] RegisterRetailerRequest request,
-        [FromForm] List<IFormFile>? files)
-    {
-        var result = await Mediator.Send(new RegisterRetailerCommand(
-            request.Name, request.Cnic, request.MobileNumber, request.Email, request.Password,
-            request.BusinessName, request.Ntn, request.Iban, request.BusinessAddress,
-            request.Latitude, request.Longitude, request.DistributorId, null));
-
-        if (files is { Count: > 0 })
-        {
-            var payloads = files.Where(f => f.Length > 0)
-                .Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
-            if (payloads.Count > 0)
-                await Mediator.Send(new UploadRetailerBusinessImagesCommand(result.Id, payloads));
-        }
-
-        return CreatedAtAction(nameof(GetById), new { id = result.Id }, new
-        {
-            id = result.Id,
-            distributorId = result.DistributorId,
-            distributorName = result.DistributorName,
-            distanceKm = result.DistanceKm
+            message = "Registered with your photos and assigned to a distributor. " +
+                      "Your distributor and Pak Suzuki Super Admin will review the application."
         });
     }
 
@@ -145,31 +124,36 @@ public class RetailersController : BaseApiController
         return NoContent();
     }
 
+    /// <summary>Add more shop photos to an existing retailer (multipart field name: files).</summary>
     [HttpPost("business-images/{id:guid}")]
-    [AllowAnonymous]
+    [Authorize]
     [RequestSizeLimit(50_000_000)]
+    [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadBusinessImages(Guid id, [FromForm] List<IFormFile> files)
     {
-        if (files is null || files.Count == 0)
-            return BadRequest(new
-            {
-                title = "Validation failed",
-                status = 400,
-                errors = new { files = new[] { "At least one image file is required (form field name: files)." } }
-            });
+        var errors = ImageUploadRules.Validate(
+            null, files, businessImagesRequired: true, businessField: "files");
+        if (errors.Count > 0) return ValidationProblem(errors);
 
-        var payloads = files.Where(f => f.Length > 0)
-            .Select(f => (f.FileName, (Stream)f.OpenReadStream())).ToList();
-        if (payloads.Count == 0)
-            return BadRequest(new
-            {
-                title = "Validation failed",
-                status = 400,
-                errors = new { files = new[] { "Uploaded files were empty." } }
-            });
-
+        var payloads = ImageUploadRules.ToUploadedImages(files)
+            .Select(i => (i.FileName, i.Content)).ToList();
         var urls = await Mediator.Send(new UploadRetailerBusinessImagesCommand(id, payloads));
         return Ok(new { urls });
+    }
+
+    /// <summary>Replace the profile / avatar photo (multipart field name: file). Mobile + web.</summary>
+    [HttpPost("profile-image/{id:guid}")]
+    [Authorize]
+    [RequestSizeLimit(20_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadProfileImage(Guid id, IFormFile file)
+    {
+        var errors = ImageUploadRules.ValidateSingle(file);
+        if (errors.Count > 0) return ValidationProblem(errors);
+
+        await using var stream = file.OpenReadStream();
+        var url = await Mediator.Send(new UploadRetailerProfileImageCommand(id, file.FileName, stream));
+        return Ok(new { url });
     }
 
     [HttpGet("blocking-status/{id:guid}")]
@@ -182,6 +166,30 @@ public class RetailersController : BaseApiController
     public async Task<IActionResult> Unblock(Guid id)
     {
         await Mediator.Send(new UnblockRetailerCommand(id));
+        return NoContent();
+    }
+
+    [HttpPatch("activate/{id:guid}")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> Activate(Guid id)
+    {
+        await Mediator.Send(new SetRetailerActiveCommand(id, true));
+        return NoContent();
+    }
+
+    [HttpPatch("deactivate/{id:guid}")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> Deactivate(Guid id)
+    {
+        await Mediator.Send(new SetRetailerActiveCommand(id, false));
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> SoftDelete(Guid id)
+    {
+        await Mediator.Send(new SoftDeleteRetailerCommand(id));
         return NoContent();
     }
 
@@ -200,10 +208,32 @@ public class RetailersController : BaseApiController
 }
 
 public record RetailerApprovalRequest(ApprovalStatus Decision, string? Remarks);
-public record RegisterRetailerRequest(
-    string Name, string Cnic, string MobileNumber, string Email, string Password,
-    string BusinessName, string Ntn, string Iban, string BusinessAddress,
-    double Latitude, double Longitude, Guid? DistributorId = null, List<string>? BusinessImageUrls = null);
+
+/// <summary>Retailer sign-up form (multipart/form-data: text fields + photo files).</summary>
+public class RegisterRetailerRequest
+{
+    public string Name { get; set; } = "";
+    public string Cnic { get; set; } = "";
+    public string MobileNumber { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Password { get; set; } = "";
+    public string BusinessName { get; set; } = "";
+    public string Ntn { get; set; } = "";
+    public string Iban { get; set; } = "";
+    public string BusinessAddress { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+
+    /// <summary>Leave empty to auto-assign the nearest approved distributor.</summary>
+    public Guid? DistributorId { get; set; }
+
+    /// <summary>Optional profile / owner photo.</summary>
+    public IFormFile? ProfileImage { get; set; }
+
+    /// <summary>Shop / business photos — at least one is required.</summary>
+    public List<IFormFile>? BusinessImages { get; set; }
+}
+
 public record UpdateRetailerRequest(
     string Name, string MobileNumber, string Email, string BusinessName,
     string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude);

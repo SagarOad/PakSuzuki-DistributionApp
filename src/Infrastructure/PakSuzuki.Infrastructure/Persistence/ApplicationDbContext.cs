@@ -34,6 +34,17 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
     public DbSet<ProductPrice> ProductPrices => Set<ProductPrice>();
     public DbSet<ProductVariant> ProductVariants => Set<ProductVariant>();
     public DbSet<ProductSectionImage> ProductSectionImages => Set<ProductSectionImage>();
+    public DbSet<ProductCatalogProfile> ProductCatalogProfiles => Set<ProductCatalogProfile>();
+    public DbSet<CatalogProductType> CatalogProductTypes => Set<CatalogProductType>();
+    public DbSet<CatalogCategory> CatalogCategories => Set<CatalogCategory>();
+    public DbSet<CatalogPType> CatalogPTypes => Set<CatalogPType>();
+    public DbSet<CatalogSupplier> CatalogSuppliers => Set<CatalogSupplier>();
+    public DbSet<CatalogSource> CatalogSources => Set<CatalogSource>();
+    public DbSet<CatalogGstInvoiceType> CatalogGstInvoiceTypes => Set<CatalogGstInvoiceType>();
+    public DbSet<CatalogSupplierRule> CatalogSupplierRules => Set<CatalogSupplierRule>();
+    public DbSet<TaxRule> TaxRules => Set<TaxRule>();
+    public DbSet<DeliveryApprovalThreshold> DeliveryApprovalThresholds => Set<DeliveryApprovalThreshold>();
+    public DbSet<PriceVisibilityRule> PriceVisibilityRules => Set<PriceVisibilityRule>();
     public DbSet<ShopBanner> ShopBanners => Set<ShopBanner>();
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
@@ -42,12 +53,22 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
     public DbSet<Incentive> Incentives => Set<Incentive>();
     public DbSet<IncentiveParticipant> IncentiveParticipants => Set<IncentiveParticipant>();
     public DbSet<IncentiveAchievementSlab> IncentiveAchievementSlabs => Set<IncentiveAchievementSlab>();
+    public DbSet<ProductGroup> ProductGroups => Set<ProductGroup>();
+    public DbSet<ProductGroupMember> ProductGroupMembers => Set<ProductGroupMember>();
+    public DbSet<IncentiveScheme> IncentiveSchemes => Set<IncentiveScheme>();
+    public DbSet<IncentiveSchemeSlab> IncentiveSchemeSlabs => Set<IncentiveSchemeSlab>();
+    public DbSet<IncentiveSchemeDistributor> IncentiveSchemeDistributors => Set<IncentiveSchemeDistributor>();
     public DbSet<OrderClaim> OrderClaims => Set<OrderClaim>();
     public DbSet<ClaimImage> ClaimImages => Set<ClaimImage>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<SapOutboundQueue> SapOutboundQueues => Set<SapOutboundQueue>();
+    public DbSet<PartsOrder> PartsOrders => Set<PartsOrder>();
+    public DbSet<PartsOrderLine> PartsOrderLines => Set<PartsOrderLine>();
+    public DbSet<PartsDeliveryHeader> PartsDeliveryHeaders => Set<PartsDeliveryHeader>();
+    public DbSet<PartsDeliveryDetail> PartsDeliveryDetails => Set<PartsDeliveryDetail>();
     public DbSet<Target> Targets => Set<Target>();
     public DbSet<RegionalHeadAssignment> RegionalHeadAssignments => Set<RegionalHeadAssignment>();
+    public DbSet<AppNotification> AppNotifications => Set<AppNotification>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -67,6 +88,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
 
         // Computed in C# only — not a database column.
         builder.Entity<Target>().Ignore(t => t.AchievementPercent);
+        builder.Entity<Target>().Property(t => t.TargetAmount).HasColumnType("decimal(18,2)");
+        builder.Entity<Target>().Property(t => t.AchievedAmount).HasColumnType("decimal(18,2)");
 
         // Global soft-delete filter: every ISoftDeletable entity is automatically
         // excluded from queries once IsDeleted=true, without every handler needing a .Where().

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Eye, Trash2, Check, X, RefreshCcw, Truck, UserPlus } from 'lucide-react'
+import { Eye, Trash2, Check, X, RefreshCcw, Truck, UserPlus, Power } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
 import { StatCard, StatCardRow } from '@/components/ui/StatCard'
@@ -13,6 +13,8 @@ import {
   DateFilterField
 } from '@/components/ui/DataTable'
 import { RequestActionButton, SendForCorrectionModal } from '@/components/ui/SendForCorrectionModal'
+import PlaceholderImage from '@/components/ui/PlaceholderImage'
+import { downloadExcel, fetchAllFromApi, inDateRange, exportFailed } from '@/utils/excelExport'
 import clsx from 'clsx'
 
 interface DistributorRow {
@@ -26,6 +28,7 @@ interface DistributorRow {
   email: string
   mobileNumber: string
   createdAtUtc: string
+  profileImageUrl?: string | null
 }
 
 interface DistributorDetail {
@@ -65,6 +68,7 @@ export default function DistributorsPage() {
   const [toDate, setToDate] = useState('')
   const [correctionId, setCorrectionId] = useState<string | null>(null)
   const [correctionRemarks, setCorrectionRemarks] = useState('')
+  const [exporting, setExporting] = useState(false)
 
   const setTab = (next: Tab) => {
     setPage(1)
@@ -121,9 +125,34 @@ export default function DistributorsPage() {
     }
   })
 
+  const removeDistributor = useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/distributors/${id}`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['distributors-list'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-superadmin'] })
+    }
+  })
+
+  const reactivateDistributor = useMutation({
+    mutationFn: async (id: string) => {
+      await api.patch(`/distributors/activate/${id}`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['distributors-list'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-superadmin'] })
+    }
+  })
+
   const rows = tab === 'list' ? listQuery.data : pendingQuery.data
   const loading = tab === 'list' ? listQuery.isLoading : pendingQuery.isLoading
   const queryError = tab === 'list' ? listQuery.isError : pendingQuery.isError
+
+  function listStatus(d: DistributorRow) {
+    if (d.approvalStatus === 'Approved' && !d.isActive) return 'Deactivated'
+    return d.isActive ? 'Active' : d.approvalStatus
+  }
 
   const visibleItems = useMemo(() => {
     let items = rows?.items ?? []
@@ -147,6 +176,42 @@ export default function DistributorsPage() {
     const end = Math.min(rows.pageNumber * 10, rows.totalCount)
     return `Showing ${String(start).padStart(2, '0')} to ${String(end).padStart(2, '0')} of ${rows.totalCount} entries`
   }, [rows])
+
+  function applyLocalFilters(items: DistributorRow[]) {
+    let next = items
+    if (statusFilter === 'active') next = next.filter((d) => d.isActive)
+    else if (statusFilter === 'pending') next = next.filter((d) => d.approvalStatus === 'PendingReview')
+    return next.filter((d) => inDateRange(d.createdAtUtc, fromDate, toDate))
+  }
+
+  async function exportDistributors() {
+    setExporting(true)
+    try {
+      const path = tab === 'list' ? '/distributors' : '/distributors/pending'
+      const all = await fetchAllFromApi<DistributorRow>(path, {
+        search: tab === 'list' ? (search || undefined) : undefined
+      })
+      const rowsToExport = applyLocalFilters(all)
+      downloadExcel(
+        `distributors-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
+        [
+          { header: 'Distributor Name', value: (d) => d.name },
+          { header: 'Code', value: (d) => d.distributorCode },
+          { header: 'Contact Number', value: (d) => d.mobileNumber },
+          { header: 'Email', value: (d) => d.email },
+          { header: 'Location', value: (d) => d.regionName },
+          { header: 'Business Name', value: (d) => d.businessName },
+          { header: 'Status', value: (d) => listStatus(d) },
+          { header: 'Created', value: (d) => d.createdAtUtc?.slice(0, 10) ?? '' }
+        ],
+        rowsToExport
+      )
+    } catch (err) {
+      exportFailed(err)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   if (!isStaff) {
     return (
@@ -226,12 +291,12 @@ export default function DistributorsPage() {
                 ]}
               />
               <span className="text-sm font-semibold text-[#0B2E59]">From</span>
-              <DateFilterField value={fromDate} onChange={setFromDate} />
+              <DateFilterField value={fromDate} onChange={(v) => { setFromDate(v); setPage(1) }} />
               <span className="text-sm font-semibold text-[#0B2E59]">To</span>
-              <DateFilterField value={toDate} onChange={setToDate} />
+              <DateFilterField value={toDate} onChange={(v) => { setToDate(v); setPage(1) }} />
             </>
           }
-          toolbarActions={<ExportExcelButton />}
+          toolbarActions={<ExportExcelButton onClick={() => void exportDistributors()} loading={exporting} />}
           columns={[
             { key: 'name', header: 'Distributor Name', wide: true },
             { key: 'contact', header: 'Contact Number' },
@@ -252,7 +317,17 @@ export default function DistributorsPage() {
         >
           {visibleItems.map((d) => (
             <tr key={d.id} className="border-b border-[#E2E4EA]/80 hover:bg-[#F5F7FB]/60">
-              <td className="pl-4 pr-3 py-3.5 font-semibold text-[#0B2E59]">{d.name}</td>
+              <td className="pl-4 pr-3 py-3.5 font-semibold text-[#0B2E59]">
+                <div className="flex items-center gap-2.5">
+                  <PlaceholderImage
+                    src={d.profileImageUrl}
+                    alt={d.name}
+                    className="h-9 w-9 shrink-0 rounded-full border border-suzuki-line bg-suzuki-mist"
+                    imgClassName="h-full w-full object-cover"
+                  />
+                  <span>{d.name}</span>
+                </div>
+              </td>
               <td className="px-3 py-3.5 text-[#64748B]">{d.mobileNumber}</td>
               <td className="px-3 py-3.5 text-[#64748B]">{d.email}</td>
               <td className="px-3 py-3.5 text-[#64748B]">{d.regionName}</td>
@@ -261,7 +336,7 @@ export default function DistributorsPage() {
                 <StatusPill
                   status={
                     tab === 'list'
-                      ? (d.isActive ? 'Active' : d.approvalStatus)
+                      ? listStatus(d)
                       : (d.approvalStatus === 'PendingReview' ? 'Pending' : d.approvalStatus)
                   }
                 />
@@ -302,11 +377,34 @@ export default function DistributorsPage() {
                         <RefreshCcw size={14} strokeWidth={2.5} />
                       </RequestActionButton>
                     </>
-                  ) : (
-                    <RequestActionButton tone="view" title="Remove" onClick={() => undefined}>
-                      <Trash2 size={15} />
-                    </RequestActionButton>
-                  )}
+                  ) : role === 'SuperAdmin' ? (
+                    <>
+                      {d.approvalStatus === 'Approved' && !d.isActive && (
+                        <RequestActionButton
+                          tone="approve"
+                          title="Reactivate"
+                          onClick={() => {
+                            if (window.confirm(`Reactivate ${d.name}?`)) {
+                              reactivateDistributor.mutate(d.id)
+                            }
+                          }}
+                        >
+                          <Power size={15} />
+                        </RequestActionButton>
+                      )}
+                      <RequestActionButton
+                        tone="reject"
+                        title="Remove"
+                        onClick={() => {
+                          if (window.confirm(`Delete ${d.name}? They will be removed from the list and cannot log in.`)) {
+                            removeDistributor.mutate(d.id)
+                          }
+                        }}
+                      >
+                        <Trash2 size={15} />
+                      </RequestActionButton>
+                    </>
+                  ) : null}
                 </div>
               </td>
             </tr>
@@ -340,7 +438,7 @@ export default function DistributorsPage() {
 
 function StatusPill({ status }: { status: string }) {
   const ok = status === 'Active' || status === 'Approved'
-  const bad = status === 'Rejected'
+  const bad = status === 'Rejected' || status === 'Deactivated'
   const warn = status === 'SentBackForCorrection' || status === 'PendingReview' || status === 'Pending'
   return (
     <span

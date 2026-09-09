@@ -7,11 +7,17 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// IIS app-pool must be able to write here; missing folder/permission often causes 500.30.
+Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "logs"));
+Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "email-outbox"));
+
 // ---------- Serilog ----------
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .WriteTo.Console()
-    .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day));
+    .WriteTo.File(
+        Path.Combine(builder.Environment.ContentRootPath, "logs", "log-.txt"),
+        rollingInterval: RollingInterval.Day));
 
 // ---------- Layers (Clean Architecture composition root) ----------
 builder.Services.AddApplication();
@@ -90,10 +96,20 @@ builder.Services.AddSwaggerWithJwt();
 
 var app = builder.Build();
 
-// ---------- Seed roles + first SuperAdmin (dev convenience) ----------
-using (var scope = app.Services.CreateScope())
+// ---------- Migrate DB + seed roles/SuperAdmin/regions ----------
+// Failure here is the usual cause of IIS HTTP 500.30 (bad connection string / SQL auth).
+try
 {
+    using var scope = app.Services.CreateScope();
     await DbSeeder.SeedAsync(scope.ServiceProvider);
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex,
+        "Startup database migrate/seed failed. Check ConnectionStrings:DefaultConnection. " +
+        "Under IIS, Trusted_Connection=True usually fails — use SQL User Id/Password, " +
+        "or grant the app-pool identity access to SQL Server.");
+    throw;
 }
 
 // ---------- Middleware pipeline ----------

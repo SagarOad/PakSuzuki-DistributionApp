@@ -8,6 +8,7 @@ import {
 import clsx from 'clsx'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
+import { downloadExcel } from '@/utils/excelExport'
 import {
   type OrderDetail,
   type UiOrderStatus,
@@ -17,7 +18,6 @@ import {
   locationLine,
   displayOrderQty,
   displayLineAmount,
-  paymentLabel,
   toUiStatus,
   uiStatusToApi
 } from './orderTypes'
@@ -38,7 +38,10 @@ export default function OrderDetailsPage() {
   const [podModalOpen, setPodModalOpen] = useState(false)
   const [podFile, setPodFile] = useState<File | null>(null)
   const [podPreview, setPodPreview] = useState<string | null>(null)
+  const [podTrackingNote, setPodTrackingNote] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [passModalOpen, setPassModalOpen] = useState(false)
+  const [shipTo, setShipTo] = useState<'Distributor' | 'Retailer'>('Distributor')
 
   const isStaff = role === 'SuperAdmin' || role === 'Admin'
   const isDistributor = role === 'Distributor'
@@ -50,8 +53,8 @@ export default function OrderDetailsPage() {
   })
 
   const order = detailQuery.data
-  const uiStatus = order ? toUiStatus(order.status) : 'Pending'
-  const pay = order ? paymentLabel(order.status) : 'In Approval'
+  const statusCode = order?.statusCode || order?.status || ''
+  const uiStatus = order ? toUiStatus(order.status, order.statusCode) : 'Pending'
 
   useEffect(() => {
     setNoteHydrated(false)
@@ -102,8 +105,18 @@ export default function OrderDetailsPage() {
   })
 
   const distributorAction = useMutation({
-    mutationFn: async (decision: string) =>
-      api.post(`/orders/distributor-action/${id}`, { decision, remarks: note || null, amendedItems: null }),
+    mutationFn: async (payload: {
+      decision: string
+      fulfillmentChoice?: string | null
+      pakSuzukiShipTo?: string | null
+    }) =>
+      api.post(`/orders/distributor-action/${id}`, {
+        decision: payload.decision,
+        remarks: note || null,
+        amendedItems: null,
+        fulfillmentChoice: payload.fulfillmentChoice ?? null,
+        pakSuzukiShipTo: payload.pakSuzukiShipTo ?? null
+      }),
     onSuccess: async () => {
       setError(null)
       await invalidate()
@@ -114,36 +127,126 @@ export default function OrderDetailsPage() {
     }
   })
 
-  const busy = patchStatus.isPending || pakSuzukiAction.isPending || distributorAction.isPending
+  const refreshSap = useMutation({
+    mutationFn: async () => (await api.get(`/orders/sap-status/${id}`)).data,
+    onSuccess: async () => {
+      setError(null)
+      await invalidate()
+    },
+    onError: (e: unknown) => {
+      setError(
+        (e as { response?: { data?: { detail?: string; title?: string; message?: string } } })?.response
+          ?.data?.detail ||
+          (e as { response?: { data?: { title?: string } } })?.response?.data?.title ||
+          (e as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          'Could not refresh manufacturer status.'
+      )
+    }
+  })
+
+  const retrySap = useMutation({
+    mutationFn: async () => {
+      if (!window.confirm('Re-queue this order for the manufacturer system?')) throw new Error('cancelled')
+      await api.post(`/orders/retry-sap/${id}`)
+    },
+    onSuccess: async () => {
+      setError(null)
+      await invalidate()
+    },
+    onError: (e: unknown) => {
+      if ((e as Error)?.message === 'cancelled') return
+      setError(
+        (e as { response?: { data?: { detail?: string; title?: string; message?: string } } })?.response
+          ?.data?.detail ||
+          (e as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          'Could not re-queue order.'
+      )
+    }
+  })
+
+  const busy =
+    patchStatus.isPending ||
+    pakSuzukiAction.isPending ||
+    distributorAction.isPending ||
+    refreshSap.isPending ||
+    retrySap.isPending
 
   const isDistributorDirect = order?.source === 'DistributorDirectOrder'
   const isRetailerOrder = order?.source === 'RetailerOrder'
-  /** Ship-to-Party: threshold-eligible retailer — Pak Suzuki delivers directly to retailer. */
-  const isShipToParty = !!(isRetailerOrder && order?.thresholdReached)
-  /** Who physically ships / may advance delivery status. */
-  const pakSuzukiDelivers = !!(isDistributorDirect || isShipToParty)
+  const thresholdMet = !!(order?.thresholdMet ?? order?.thresholdReached)
+  const passedToPakSuzuki = order?.fulfillmentChoice === 'PassToPakSuzuki'
+  const isShipToParty = !!(isRetailerOrder && passedToPakSuzuki && order?.pakSuzukiShipTo === 'Retailer')
+  const pakSuzukiDelivers = !!(isDistributorDirect || passedToPakSuzuki)
   const canShip =
-    (pakSuzukiDelivers && isStaff) || (isRetailerOrder && !isShipToParty && isDistributor)
-  /** Distributor pending tools (amend / partial / manufacturer cart) — not for Ship-to-Party. */
+    (pakSuzukiDelivers && isStaff) || (isRetailerOrder && !passedToPakSuzuki && isDistributor)
   const canDistributorFulfillTools =
-    isDistributor && isRetailerOrder && !isShipToParty && order?.status === 'PendingDistributorApproval'
-  const canDistributorConfirm =
-    isDistributor && isRetailerOrder && order?.status === 'PendingDistributorApproval'
+    isDistributor &&
+    isRetailerOrder &&
+    statusCode === 'PendingDistributorApproval' &&
+    !order?.pakSuzukiActionedAtUtc
+  const canDistributorConfirm = canDistributorFulfillTools
+  /** Super Admin amended qty and sent back — approve as-is or change qty, then return to Pak Suzuki. */
+  const canDistributorReviewPakSuzukiAmendment =
+    isDistributor &&
+    statusCode === 'PendingDistributorApproval' &&
+    !!order?.pakSuzukiActionedAtUtc
   const canStaffPending =
-    isStaff && pakSuzukiDelivers && order?.status === 'PendingPakSuzukiApproval'
+    isStaff && pakSuzukiDelivers && statusCode === 'PendingPakSuzukiApproval'
+  const canStaffAmend = canStaffPending
+  const canAmend =
+    canDistributorFulfillTools || canStaffAmend || canDistributorReviewPakSuzukiAmendment
+  const showDistributorPendingActions =
+    canDistributorConfirm || canDistributorReviewPakSuzukiAmendment
 
   const confirmOrder = async () => {
     if (!order) return
+    const ok = window.confirm(
+      canStaffPending
+        ? 'Confirm this order? It will be queued for the manufacturer system.'
+        : canDistributorReviewPakSuzukiAmendment
+          ? 'Approve these quantities and send the order back to Pak Suzuki?'
+          : 'Fulfill this order from your own stock?'
+    )
+    if (!ok) return
     setError(null)
     try {
       if (canStaffPending) {
         await pakSuzukiAction.mutateAsync('ApprovedByPakSuzuki')
         return
       }
-      if (canDistributorConfirm) {
-        // Ship-to-Party Confirm → PendingPakSuzukiApproval (API). Normal → ApprovedByDistributor.
-        await distributorAction.mutateAsync('ApprovedByDistributor')
+      if (canDistributorReviewPakSuzukiAmendment) {
+        await distributorAction.mutateAsync({
+          decision: 'ForwardedToPakSuzuki',
+          fulfillmentChoice: 'PassToPakSuzuki',
+          pakSuzukiShipTo: order.pakSuzukiShipTo || 'Distributor'
+        })
+        return
       }
+      if (canDistributorConfirm) {
+        await distributorAction.mutateAsync({
+          decision: 'ApprovedByDistributor',
+          fulfillmentChoice: 'DistributorSelf'
+        })
+      }
+    } catch {
+      /* error state set by mutation */
+    }
+  }
+
+  const passToPakSuzuki = async () => {
+    if (!order) return
+    const ok = window.confirm(
+      `Pass this order to Pak Suzuki (ship to ${shipTo === 'Retailer' ? 'retailer' : 'distributor'})?`
+    )
+    if (!ok) return
+    setError(null)
+    try {
+      await distributorAction.mutateAsync({
+        decision: 'ForwardedToPakSuzuki',
+        fulfillmentChoice: 'PassToPakSuzuki',
+        pakSuzukiShipTo: shipTo
+      })
+      setPassModalOpen(false)
     } catch {
       /* error state set by mutation */
     }
@@ -151,17 +254,24 @@ export default function OrderDetailsPage() {
 
   const cancelOrder = async () => {
     if (!order) return
+    const ok = window.confirm(
+      canStaffPending
+        ? 'Cancel / reject this manufacturer order?'
+        : 'Reject this order and send it back to the retailer for changes?'
+    )
+    if (!ok) return
     setError(null)
     if (canStaffPending) {
       await pakSuzukiAction.mutateAsync('Cancelled')
       return
     }
     if (canDistributorConfirm) {
-      await distributorAction.mutateAsync('RejectedByDistributor')
+      await distributorAction.mutateAsync({ decision: 'RejectedByDistributor' })
     }
   }
 
   const startDeliveryWithLabels = async () => {
+    if (!window.confirm('Start delivery for this order?')) return
     await patchStatus.mutateAsync('PartiallyDelivered')
   }
 
@@ -169,6 +279,7 @@ export default function OrderDetailsPage() {
 
   const confirmPodDelivered = async () => {
     if (!id) return
+    if (!window.confirm('Mark this order as delivered?')) return
     setError(null)
     try {
       if (podFile) {
@@ -178,14 +289,23 @@ export default function OrderDetailsPage() {
           headers: { 'Content-Type': 'multipart/form-data' }
         })
       }
-      await patchStatus.mutateAsync('Delivered')
+      await api.patch(`/orders/status/${id}`, {
+        status: 'Delivered',
+        remarks: podTrackingNote.trim() || null
+      })
+      setPodModalOpen(false)
+      setPodFile(null)
+      setPodPreview(null)
+      setPodTrackingNote('')
+      await invalidate()
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string; title?: string } } })?.response?.data
-      setError(msg?.detail || msg?.title || 'Could not mark delivered / upload proof.')
+      const msg = (e as { response?: { data?: { detail?: string; title?: string; message?: string } } })?.response?.data
+      setError(msg?.detail || msg?.title || msg?.message || 'Could not mark delivered / upload proof.')
     }
   }
 
   const applyUiStatus = async (ui: UiOrderStatus) => {
+    if (!window.confirm(`Change order status to "${ui}"?`)) return
     await patchStatus.mutateAsync(uiStatusToApi(ui))
   }
 
@@ -206,14 +326,39 @@ export default function OrderDetailsPage() {
 
   const showCompletedTabs = uiStatus === 'Completed' || uiStatus === 'Cancelled'
   const activeTab = showCompletedTabs ? tab : 'details'
-  const canAmend = canDistributorFulfillTools
+  const allowsPartialDelivery = order.allowsPartialDelivery
   const showTracking =
     !showCompletedTabs &&
     (uiStatus === 'In Process' ||
       uiStatus === 'Delivery In Process' ||
       (pakSuzukiDelivers && uiStatus === 'Pending'))
-  const tracking = getOrderTracking(order.status)
+  const tracking = getOrderTracking(order.status, order.statusCode)
   const canEditStatus = isStaff && pakSuzukiDelivers && uiStatus !== 'Completed' && uiStatus !== 'Cancelled'
+  const showManufacturerQueue =
+    (isStaff || isDistributor) &&
+    !!(
+      pakSuzukiDelivers ||
+      order.poRef ||
+      order.middlewareStatus ||
+      order.sapDocumentNumber ||
+      statusCode === 'SubmittedToSap' ||
+      statusCode === 'ApprovedByPakSuzuki' ||
+      statusCode === 'PendingPakSuzukiApproval' ||
+      statusCode === 'ForwardedToPakSuzuki'
+    )
+  const canRefreshSap = isStaff && !!(order.poRef || order.middlewareStatus || order.sapDocumentNumber || statusCode === 'SubmittedToSap')
+  const canRetrySap = isStaff && !!(order.poRef || order.middlewareStatus || statusCode === 'SubmittedToSap' || statusCode === 'ApprovedByPakSuzuki')
+
+  const orderInfoProps = {
+    order,
+    uiStatus,
+    showManufacturerQueue,
+    canRefreshSap,
+    canRetrySap,
+    sapBusy: refreshSap.isPending || retrySap.isPending,
+    onRefreshSap: () => void refreshSap.mutateAsync(),
+    onRetrySap: () => void retrySap.mutateAsync()
+  }
 
   return (
     <div className="space-y-5 pb-8">
@@ -247,19 +392,30 @@ export default function OrderDetailsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {canDistributorReviewPakSuzukiAmendment && (
+            <div className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900">
+              <AlertTriangle size={16} className="shrink-0" />
+              Pak Suzuki amended quantities — approve them or change qty, then send back to Pak Suzuki.
+            </div>
+          )}
           {canAmend && (
             <button
               type="button"
-              onClick={() => navigate(`/orders/${order.id}/amend`)}
+              onClick={() => {
+                if (!window.confirm('Open amend quantities for this order?')) return
+                navigate(`/orders/${order.id}/amend`)
+              }}
               className="inline-flex items-center gap-1.5 rounded-xl border border-suzuki-blue/40 bg-white px-4 py-2.5 text-sm font-bold text-suzuki-blue hover:bg-suzuki-ice"
             >
               <Pencil size={14} /> Amend Order
             </button>
           )}
-          {isShipToParty && (
+          {thresholdMet && isRetailerOrder && (
             <div className="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700">
               <AlertTriangle size={16} className="shrink-0" />
-              Ship-to-Party: Threshold Reached — Pak Suzuki delivers to retailer
+              {passedToPakSuzuki
+                ? `Threshold met — passed to Pak Suzuki (${order?.pakSuzukiShipTo === 'Retailer' ? 'ship to retailer' : 'ship to distributor'})`
+                : 'Threshold met — you can fulfill this order or pass it to Pak Suzuki'}
             </div>
           )}
         </div>
@@ -272,11 +428,9 @@ export default function OrderDetailsPage() {
       {activeTab === 'summary' ? (
         <div className="space-y-4">
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <OrderInfoCard order={order} uiStatus={uiStatus} />
-            <DeliveryPaymentCard
+            <OrderInfoCard {...orderInfoProps} />
+            <DeliveryDetailsCard
               order={order}
-              uiStatus={uiStatus}
-              payment={pay}
               showProof
             />
           </div>
@@ -291,11 +445,9 @@ export default function OrderDetailsPage() {
       ) : (
         <>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <OrderInfoCard order={order} uiStatus={uiStatus} />
-            <DeliveryPaymentCard
+            <OrderInfoCard {...orderInfoProps} />
+            <DeliveryDetailsCard
               order={order}
-              uiStatus={uiStatus}
-              payment={pay}
               showProof={uiStatus === 'Completed' || uiStatus === 'Delivery In Process'}
             />
           </div>
@@ -307,30 +459,44 @@ export default function OrderDetailsPage() {
             onEditStatus={() => setStatusModalOpen(true)}
             note={note}
             onNoteChange={setNote}
-            showNote={canDistributorConfirm || canStaffPending || canShip}
-            distributorNote={
-              order.status === 'SentBackForModification' || order.distributorRemarks
-                ? order.distributorRemarks
-                : null
-            }
+            showNote={showDistributorPendingActions || canStaffPending || canShip}
+            distributorNote={order.distributorRemarks || null}
+            pakSuzukiNote={order.pakSuzukiRemarks || null}
+            retailerNote={order.retailerRemarks}
             footer={
               <OrderActions
                 uiStatus={uiStatus}
                 busy={busy}
                 canShip={canShip}
-                showPendingActions={canDistributorConfirm || canStaffPending}
+                allowsPartialDelivery={allowsPartialDelivery}
+                showPendingActions={showDistributorPendingActions || canStaffPending}
                 showFulfillTools={canDistributorFulfillTools}
-                isShipToParty={isShipToParty}
+                resubmitToPakSuzuki={canDistributorReviewPakSuzukiAmendment}
+                thresholdMet={thresholdMet}
                 needsLabelsFlow={isShipToParty && isStaff}
-                onCancel={cancelOrder}
+                onCancel={
+                  canDistributorReviewPakSuzukiAmendment
+                    ? undefined
+                    : cancelOrder
+                }
                 onConfirm={confirmOrder}
-                onAmend={canDistributorFulfillTools ? () => navigate(`/orders/${order.id}/amend`) : undefined}
-                onForwardToManufacturer={
-                  canDistributorFulfillTools ? () => navigate(`/orders/${order.id}/amend`) : undefined
+                onAmend={
+                  canAmend
+                    ? () => {
+                        if (!window.confirm('Open amend quantities for this order?')) return
+                        navigate(`/orders/${order.id}/amend`)
+                      }
+                    : undefined
+                }
+                onPassToPakSuzuki={
+                  canDistributorFulfillTools && thresholdMet ? () => setPassModalOpen(true) : undefined
                 }
                 onStartDelivery={() => {
                   if (isShipToParty && isStaff) setLabelsModalOpen(true)
-                  else void patchStatus.mutateAsync('PartiallyDelivered')
+                  else {
+                    if (!window.confirm('Start delivery for this order?')) return
+                    void patchStatus.mutateAsync('PartiallyDelivered')
+                  }
                 }}
                 onMarkDelivered={openPodModal}
                 onViewSummary={() => setTab('summary')}
@@ -347,6 +513,7 @@ export default function OrderDetailsPage() {
           onClose={() => setStatusModalOpen(false)}
           onSelect={applyUiStatus}
           busy={busy}
+          allowsPartialDelivery={allowsPartialDelivery}
         />
       )}
 
@@ -364,23 +531,81 @@ export default function OrderDetailsPage() {
           order={order}
           busy={busy}
           podPreview={podPreview}
+          trackingNote={podTrackingNote}
+          onTrackingNoteChange={setPodTrackingNote}
           onClose={() => {
             setPodModalOpen(false)
             setPodFile(null)
             setPodPreview(null)
+            setPodTrackingNote('')
           }}
           onFile={(file) => {
             setPodFile(file)
-            setPodPreview(file ? URL.createObjectURL(file) : null)
+            setPodPreview(file && file.type.startsWith('image/') ? URL.createObjectURL(file) : null)
           }}
           onConfirm={confirmPodDelivered}
         />
+      )}
+
+      {passModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setPassModalOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-card w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-extrabold text-suzuki-navy">Pass to Pak Suzuki</h3>
+            <p className="text-sm text-suzuki-mute">
+              This order met the pack threshold. Tell Pak Suzuki where to deliver.
+            </p>
+            <label className="block space-y-2">
+              <span className="text-xs font-bold uppercase text-suzuki-mute">Deliver to</span>
+              <select
+                className="field w-full"
+                value={shipTo}
+                onChange={(e) => setShipTo(e.target.value as 'Distributor' | 'Retailer')}
+              >
+                <option value="Distributor">Ship to distributor</option>
+                <option value="Retailer">Ship to retailer</option>
+              </select>
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setPassModalOpen(false)} className="rounded-lg bg-suzuki-ice px-4 py-2 text-sm font-bold">
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void passToPakSuzuki()}
+                className="rounded-lg bg-suzuki-red text-white px-4 py-2 text-sm font-bold disabled:opacity-50"
+              >
+                Pass order
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
 }
 
-function OrderInfoCard({ order, uiStatus }: { order: OrderDetail; uiStatus: UiOrderStatus }) {
+function OrderInfoCard({
+  order,
+  uiStatus,
+  showManufacturerQueue,
+  canRefreshSap,
+  canRetrySap,
+  sapBusy,
+  onRefreshSap,
+  onRetrySap
+}: {
+  order: OrderDetail
+  uiStatus: UiOrderStatus
+  showManufacturerQueue?: boolean
+  canRefreshSap?: boolean
+  canRetrySap?: boolean
+  sapBusy?: boolean
+  onRefreshSap?: () => void
+  onRetrySap?: () => void
+}) {
+  const sapSummary = manufacturerQueueSummary(order)
+
   return (
     <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4">
       <h2 className="text-xl font-extrabold text-suzuki-blue">
@@ -391,9 +616,47 @@ function OrderInfoCard({ order, uiStatus }: { order: OrderDetail; uiStatus: UiOr
         <Field label="Order Date" value={formatOrderDate(order.createdAtUtc)} />
         <div>
           <Label>Order Status</Label>
-          <StatusPill status={uiStatus} />
+          <StatusPill
+            status={uiStatus}
+            label={order.statusLabel || undefined}
+            statusColor={order.statusColor}
+          />
         </div>
       </div>
+
+      {(order.materialSourceCode || order.deliveryTypeCode || order.supplierCode) && (
+        <div className="border-t border-suzuki-line pt-4 space-y-3">
+          <h3 className="font-bold text-suzuki-navy">PO lane</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Vendor" value={order.vendorCode || 'PSMC'} />
+            <Field label="Source" value={order.materialSourceCode || '—'} />
+            <Field
+              label="Delivery type"
+              value={
+                order.deliveryTypeCode
+                  ? `${order.deliveryTypeCode}${order.deliveryTypeName ? ` — ${order.deliveryTypeName}` : ''}`
+                  : '—'
+              }
+            />
+            <Field label="Supplier" value={order.supplierCode || '—'} />
+          </div>
+        </div>
+      )}
+
+      {(order.thresholdMet || order.snapshotDistributorCode || order.fulfillmentChoice) && (
+        <div className="border-t border-suzuki-line pt-4 space-y-3">
+          <h3 className="font-bold text-suzuki-navy">Fulfillment</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Threshold" value={order.thresholdMet ? 'Met' : 'Not met'} />
+            <Field label="Choice" value={order.fulfillmentChoice === 'PassToPakSuzuki' ? 'Pass to Pak Suzuki' : order.fulfillmentChoice === 'DistributorSelf' ? 'Distributor fulfills' : '—'} />
+            <Field label="Pak Suzuki ship to" value={order.pakSuzukiShipTo || '—'} />
+            <Field label="Distributor code" value={order.snapshotDistributorCode || '—'} />
+            <Field label="Retailer code" value={order.snapshotRetailerCode || '—'} />
+            <Field label="Ship-to code" value={order.shipToCode || '—'} />
+            <Field label="Bill-to code" value={order.billToCode || '—'} />
+          </div>
+        </div>
+      )}
 
       <div className="border-t border-suzuki-line pt-4 space-y-3">
         <h3 className="font-bold text-suzuki-navy">
@@ -419,19 +682,142 @@ function OrderInfoCard({ order, uiStatus }: { order: OrderDetail; uiStatus: UiOr
           />
         </div>
       </div>
+
+      {showManufacturerQueue && (
+        <div className="border-t border-suzuki-line pt-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-bold text-suzuki-navy">Manufacturer / SAP queue</h3>
+            <div className="flex flex-wrap gap-2">
+              {canRefreshSap && (
+                <button
+                  type="button"
+                  disabled={sapBusy}
+                  onClick={onRefreshSap}
+                  className="rounded-lg bg-suzuki-ice text-suzuki-navy text-xs font-bold px-3 py-1.5 disabled:opacity-50"
+                >
+                  Refresh status
+                </button>
+              )}
+              {canRetrySap && (
+                <button
+                  type="button"
+                  disabled={sapBusy}
+                  onClick={onRetrySap}
+                  className="rounded-lg border border-suzuki-red/40 text-suzuki-red text-xs font-bold px-3 py-1.5 disabled:opacity-50"
+                >
+                  Re-queue for SAP
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div
+            className={clsx(
+              'rounded-xl px-4 py-3 text-sm font-semibold',
+              sapSummary.tone === 'green' && 'bg-emerald-50 text-emerald-800 border border-emerald-200',
+              sapSummary.tone === 'amber' && 'bg-amber-50 text-amber-900 border border-amber-200',
+              sapSummary.tone === 'red' && 'bg-rose-50 text-rose-800 border border-rose-200',
+              sapSummary.tone === 'grey' && 'bg-suzuki-mist text-suzuki-navy border border-suzuki-line'
+            )}
+          >
+            {sapSummary.title}
+            <p className="mt-1 text-xs font-normal opacity-90">{sapSummary.detail}</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="PO Ref" value={order.poRef || order.orderNumber} />
+            <Field label="Queue status" value={order.middlewareStatus || '—'} />
+            <Field label="SAP sales order #" value={order.sapDocumentNumber || 'Not created yet'} />
+            <Field label="Delivery #" value={order.sapDeliveryNumber || '—'} />
+            <Field label="Invoice #" value={order.sapInvoiceNumber || '—'} />
+            <Field
+              label="Transfer code"
+              value={order.sapTransferStatus != null ? String(order.sapTransferStatus) : '—'}
+            />
+            {order.sapMessage && (
+              <Field label="System message" value={order.sapMessage} className="sm:col-span-2" />
+            )}
+          </div>
+          <p className="text-[11px] text-suzuki-mute">
+            Queued = row in parts_order waiting for middleware. Sales order / delivery / invoice fill in after
+            SAP writes back.{' '}
+            <a href="/orders/middleware" className="text-suzuki-blue font-semibold hover:underline">
+              Open SAP Queue
+            </a>
+          </p>
+        </div>
+      )}
     </section>
   )
 }
 
-function DeliveryPaymentCard({
+function manufacturerQueueSummary(order: OrderDetail): {
+  title: string
+  detail: string
+  tone: 'green' | 'amber' | 'red' | 'grey'
+} {
+  const code = order.statusCode || order.status
+  if (order.sapInvoiceNumber || code === 'InvoiceConfirmed') {
+    return {
+      title: 'Completed in manufacturer system',
+      detail: 'Invoice number is available. This order finished the SAP cycle.',
+      tone: 'green'
+    }
+  }
+  if (order.sapDeliveryNumber || code === 'Delivered' || code === 'PartiallyDelivered') {
+    return {
+      title: 'Delivery recorded',
+      detail: 'SAP delivery exists. Invoice may still be pending.',
+      tone: 'amber'
+    }
+  }
+  if (order.sapTransferStatus === 9 || (order.sapMessage && !order.sapDocumentNumber)) {
+    return {
+      title: 'Queue / SAP error',
+      detail: order.sapMessage || 'Middleware reported an error. Use Re-queue if needed.',
+      tone: 'red'
+    }
+  }
+  if (order.sapDocumentNumber) {
+    return {
+      title: 'In SAP — sales order created',
+      detail: `Sales order ${order.sapDocumentNumber}. Waiting for delivery / invoice updates.`,
+      tone: 'amber'
+    }
+  }
+  if (
+    order.middlewareStatus ||
+    order.poRef ||
+    code === 'SubmittedToSap' ||
+    code === 'ApprovedByPakSuzuki'
+  ) {
+    return {
+      title: 'Queued for manufacturer system',
+      detail:
+        order.middlewareStatus ||
+        'Added to the parts_order queue. Middleware has not returned a sales order number yet.',
+      tone: 'red'
+    }
+  }
+  if (code === 'PendingPakSuzukiApproval' || code === 'ForwardedToPakSuzuki') {
+    return {
+      title: 'Not queued yet',
+      detail: 'Confirm this order as Pak Suzuki to add it to the SAP queue.',
+      tone: 'grey'
+    }
+  }
+  return {
+    title: 'Not sent to manufacturer queue',
+    detail: 'This order is not in the SAP middleware queue.',
+    tone: 'grey'
+  }
+}
+
+function DeliveryDetailsCard({
   order,
-  uiStatus,
-  payment,
   showProof
 }: {
   order: OrderDetail
-  uiStatus: UiOrderStatus
-  payment: string
   showProof?: boolean
 }) {
   const deliveryName = order.retailerName || order.distributorName
@@ -453,14 +839,23 @@ function DeliveryPaymentCard({
         </div>
       </div>
 
+      {order.distributorRemarks && (
+        <div>
+          <h3 className="font-bold text-suzuki-navy mb-2">Tracking Note</h3>
+          <p className="text-sm text-suzuki-navy leading-relaxed rounded-xl bg-suzuki-mist/60 px-4 py-3">
+            {order.distributorRemarks}
+          </p>
+        </div>
+      )}
+
       {showProof && (
         <div>
-          <Label>Proof Of Delivery Image</Label>
+          <Label>Delivery Attachment</Label>
           <div className="mt-1.5 flex flex-wrap gap-2">
             {order.proofsOfDelivery.length === 0 ? (
               <div className="aspect-square max-w-[140px] w-full rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center">
                 <span className="text-suzuki-mute font-bold text-sm flex flex-col items-center gap-1">
-                  <ImageIcon size={22} /> IMG
+                  <ImageIcon size={22} /> No file yet
                 </span>
               </div>
             ) : (
@@ -470,23 +865,19 @@ function DeliveryPaymentCard({
                   href={proof.storageUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="aspect-square w-[140px] rounded-xl bg-sky-50 border border-sky-100 overflow-hidden"
+                  className="aspect-square w-[140px] rounded-xl bg-sky-50 border border-sky-100 overflow-hidden flex flex-col items-center justify-center p-2 text-center"
                 >
-                  <img src={proof.storageUrl} alt={proof.fileName} className="w-full h-full object-cover" />
+                  {proof.fileName.match(/\.(png|jpe?g|gif|webp)$/i) ? (
+                    <img src={proof.storageUrl} alt={proof.fileName} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-xs font-semibold text-suzuki-navy break-all">{proof.fileName}</span>
+                  )}
                 </a>
               ))
             )}
           </div>
         </div>
       )}
-
-      <div>
-        <h3 className="font-bold text-suzuki-navy mb-2">Payment Status</h3>
-        <PaymentPill value={payment} />
-      </div>
-
-      {/* keep status in scope for lint when unused in future layouts */}
-      <span className="sr-only">{uiStatus}</span>
     </section>
   )
 }
@@ -500,6 +891,8 @@ function OrderSummaryCard({
   onNoteChange,
   showNote,
   distributorNote,
+  pakSuzukiNote,
+  retailerNote,
   footer
 }: {
   order: OrderDetail
@@ -510,6 +903,8 @@ function OrderSummaryCard({
   onNoteChange?: (v: string) => void
   showNote?: boolean
   distributorNote?: string | null
+  pakSuzukiNote?: string | null
+  retailerNote?: string | null
   footer?: ReactNode
 }) {
   return (
@@ -518,11 +913,42 @@ function OrderSummaryCard({
         <h3 className="text-lg font-extrabold text-suzuki-navy">Order Summary</h3>
         <button
           type="button"
+          onClick={() =>
+            downloadExcel(
+              `order-${order.orderNumber}-lines`,
+              [
+                { header: 'Product', value: (i) => i.productName },
+                { header: 'SKU', value: (i) => i.productSku },
+                { header: 'Category', value: (i) => i.categoryName ?? '' },
+                { header: 'Qty', value: (i) => displayOrderQty(i) },
+                { header: 'Unit', value: (i) => i.requestedUnit },
+                { header: 'Unit Price', value: (i) => i.unitPrice },
+                { header: 'Line Subtotal', value: (i) => displayLineAmount(i) },
+                { header: 'GST', value: (i) => i.lineGst },
+                { header: 'FED', value: (i) => i.lineFed }
+              ],
+              order.items
+            )
+          }
           className="inline-flex items-center gap-1.5 rounded-lg border border-suzuki-blue/40 text-suzuki-blue px-3 py-2 text-xs font-semibold hover:bg-suzuki-ice"
         >
           <FileSpreadsheet size={14} /> Export Excel
         </button>
       </div>
+
+      {retailerNote ? (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-suzuki-navy">
+          <span className="font-extrabold">Retailer note: </span>
+          {retailerNote}
+        </div>
+      ) : null}
+
+      {pakSuzukiNote ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          <span className="font-extrabold">Pak Suzuki amendment note: </span>
+          {pakSuzukiNote}
+        </div>
+      ) : null}
 
       {distributorNote ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -591,17 +1017,33 @@ function OrderSummaryCard({
               </button>
             )}
           </div>
-          <StatusPill status={uiStatus} />
+          <StatusPill status={uiStatus} label={order.statusLabel || undefined} statusColor={order.statusColor} />
         </div>
 
-        <div className="text-right space-y-1 min-w-[200px]">
+        <div className="text-right space-y-1 min-w-[220px]">
           <div className="flex justify-between gap-8 text-sm">
             <span className="text-suzuki-mute font-semibold">Subtotal</span>
             <span className="font-bold text-suzuki-red">{formatRs(order.subTotal)}</span>
           </div>
           <div className="flex justify-between gap-8 text-sm">
             <span className="text-suzuki-mute font-semibold">GST TAX</span>
-            <span className="font-bold text-suzuki-ink">{order.gstPercent}%</span>
+            <span className="font-bold text-suzuki-ink">
+              {formatRs(order.totalGst)}
+              <span className="text-suzuki-mute font-semibold ml-1">({order.gstPercent}%)</span>
+            </span>
+          </div>
+          {order.totalFed > 0 && (
+            <div className="flex justify-between gap-8 text-sm">
+              <span className="text-suzuki-mute font-semibold">FED</span>
+              <span className="font-bold text-suzuki-ink">{formatRs(order.totalFed)}</span>
+            </div>
+          )}
+          <div className="flex justify-between gap-8 text-sm">
+            <span className="text-suzuki-mute font-semibold">WHT (Advance Income Tax)</span>
+            <span className="font-bold text-suzuki-ink">
+              {formatRs(order.whtAmount)}
+              <span className="text-suzuki-mute font-semibold ml-1">({order.whtPercent}%)</span>
+            </span>
           </div>
           <div className="mt-2 flex justify-between gap-8 items-center rounded-xl bg-sky-50 px-3 py-2">
             <span className="font-bold text-suzuki-navy">Total Amount</span>
@@ -631,14 +1073,16 @@ function OrderActions({
   uiStatus,
   busy,
   canShip,
+  allowsPartialDelivery,
   showPendingActions,
   showFulfillTools,
-  isShipToParty,
+  resubmitToPakSuzuki,
+  thresholdMet,
   needsLabelsFlow,
   onCancel,
   onConfirm,
   onAmend,
-  onForwardToManufacturer,
+  onPassToPakSuzuki,
   onStartDelivery,
   onMarkDelivered,
   onViewSummary
@@ -647,15 +1091,18 @@ function OrderActions({
   busy: boolean
   /** Only the party who delivers may Start Delivery / Mark Delivered. */
   canShip: boolean
+  allowsPartialDelivery: boolean
   showPendingActions: boolean
-  /** Distributor amend / partial / manufacturer — never Super Admin. */
+  /** Distributor fulfill tools (fulfill myself / pass to manufacturer). */
   showFulfillTools: boolean
-  isShipToParty: boolean
+  /** Direct order returned by Pak Suzuki — resubmit only. */
+  resubmitToPakSuzuki?: boolean
+  thresholdMet?: boolean
   needsLabelsFlow: boolean
-  onCancel: () => void
+  onCancel?: () => void
   onConfirm: () => void
   onAmend?: () => void
-  onForwardToManufacturer?: () => void
+  onPassToPakSuzuki?: () => void
   onStartDelivery: () => void
   onMarkDelivered: () => void
   onViewSummary: () => void
@@ -678,39 +1125,43 @@ function OrderActions({
     return (
       <div className="flex flex-col gap-3 pt-2">
         <p className="text-xs text-suzuki-mute">
-          {isShipToParty
-            ? 'Ship-to-Party: Confirm sends this order to Pak Suzuki for direct delivery to the retailer.'
+          {resubmitToPakSuzuki
+            ? 'Pak Suzuki sent a new amendment. Change quantities if needed (Amend Qty), then approve and resubmit.'
             : showFulfillTools
-              ? 'Confirm if you can fulfill fully from inventory. Amend for partial / send-back / order to manufacturer.'
+              ? thresholdMet
+                ? 'Threshold is met. Fulfill this order yourself, or pass it to Pak Suzuki and choose where they should deliver.'
+                : 'Confirm if you can fulfill the full pack order, or reject it so the retailer can change quantities.'
               : 'Confirm or cancel this manufacturer order.'}
         </p>
         <div className="flex flex-col sm:flex-row flex-wrap gap-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onCancel}
-            className="flex-1 rounded-xl bg-sky-100 text-suzuki-navy font-extrabold py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
-          >
-            CANCELED
-          </button>
-          {showFulfillTools && onAmend && (
+          {onCancel && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onCancel}
+              className="flex-1 rounded-xl bg-sky-100 text-suzuki-navy font-extrabold py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
+            >
+              {showFulfillTools ? 'REJECT / SEND BACK' : 'CANCELED'}
+            </button>
+          )}
+          {onAmend && (
             <button
               type="button"
               disabled={busy}
               onClick={onAmend}
               className="flex-1 rounded-xl border border-suzuki-blue text-suzuki-blue font-extrabold py-3 tracking-wide hover:bg-suzuki-ice disabled:opacity-50"
             >
-              AMEND / PARTIAL
+              AMEND QTY
             </button>
           )}
-          {showFulfillTools && onForwardToManufacturer && (
+          {showFulfillTools && onPassToPakSuzuki && (
             <button
               type="button"
               disabled={busy}
-              onClick={onForwardToManufacturer}
+              onClick={onPassToPakSuzuki}
               className="flex-1 rounded-xl border border-suzuki-navy text-suzuki-navy font-extrabold py-3 tracking-wide hover:bg-suzuki-mist disabled:opacity-50"
             >
-              ORDER TO MANUFACTURER
+              PASS TO PAK SUZUKI
             </button>
           )}
           <button
@@ -719,7 +1170,11 @@ function OrderActions({
             onClick={onConfirm}
             className="flex-1 rounded-xl bg-suzuki-red text-white font-extrabold py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
           >
-            CONFIRM ORDER
+            {resubmitToPakSuzuki
+              ? 'APPROVE & RESUBMIT'
+              : showFulfillTools
+                ? 'FULFILL MYSELF'
+                : 'CONFIRM ORDER'}
           </button>
         </div>
       </div>
@@ -734,14 +1189,25 @@ function OrderActions({
   if (uiStatus === 'In Process') {
     return (
       <div className="flex justify-end pt-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onStartDelivery}
-          className="rounded-xl bg-suzuki-red text-white font-extrabold px-8 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
-        >
-          {needsLabelsFlow ? 'START DELIVERY' : 'START DELIVERY'}
-        </button>
+        {allowsPartialDelivery ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onStartDelivery}
+            className="rounded-xl bg-suzuki-red text-white font-extrabold px-8 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
+          >
+            {needsLabelsFlow ? 'START DELIVERY' : 'START DELIVERY'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onMarkDelivered}
+            className="rounded-xl bg-suzuki-navy text-white font-extrabold px-8 py-3 tracking-wide hover:bg-suzuki-blue disabled:opacity-50"
+          >
+            MARK AS DELIVERED
+          </button>
+        )}
       </div>
     )
   }
@@ -767,14 +1233,18 @@ function OrderActions({
 function ChangeStatusModal({
   onClose,
   onSelect,
-  busy
+  busy,
+  allowsPartialDelivery
 }: {
   onClose: () => void
   onSelect: (s: UiOrderStatus) => void
   busy: boolean
+  allowsPartialDelivery: boolean
 }) {
   const options: { label: UiOrderStatus; cls: string }[] = [
-    { label: 'Delivery In Process', cls: 'bg-orange-50 text-orange-600 hover:bg-orange-100' },
+    ...(allowsPartialDelivery
+      ? [{ label: 'Delivery In Process' as UiOrderStatus, cls: 'bg-orange-50 text-orange-600 hover:bg-orange-100' }]
+      : []),
     { label: 'Completed', cls: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' },
     { label: 'Cancelled', cls: 'bg-slate-100 text-slate-600 hover:bg-slate-200' },
     { label: 'In Process', cls: 'bg-rose-50 text-rose-600 hover:bg-rose-100' }
@@ -868,6 +1338,8 @@ function PodDeliveryModal({
   order,
   busy,
   podPreview,
+  trackingNote,
+  onTrackingNoteChange,
   onClose,
   onFile,
   onConfirm
@@ -875,6 +1347,8 @@ function PodDeliveryModal({
   order: OrderDetail
   busy: boolean
   podPreview: string | null
+  trackingNote: string
+  onTrackingNoteChange: (value: string) => void
   onClose: () => void
   onFile: (file: File | null) => void
   onConfirm: () => void
@@ -892,9 +1366,13 @@ function PodDeliveryModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 mb-5">
-          <h3 className="text-xl font-extrabold text-suzuki-ink">Delivery</h3>
+          <h3 className="text-xl font-extrabold text-suzuki-ink">Mark as Delivered</h3>
           <HelpCircle size={16} className="text-suzuki-mute" />
         </div>
+
+        <p className="text-sm text-suzuki-mute mb-4">
+          Add a tracking note and delivery attachment. Payment is handled outside this platform.
+        </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Retailor Name" value={name || '—'} />
@@ -905,19 +1383,32 @@ function PodDeliveryModal({
         </div>
 
         <div className="mt-4">
-          <Label>Proof of Delivery Image</Label>
+          <Label>Tracking Note</Label>
+          <textarea
+            value={trackingNote}
+            onChange={(e) => onTrackingNoteChange(e.target.value)}
+            rows={3}
+            placeholder="Courier name, vehicle no., ETA, or other delivery instructions…"
+            className="mt-1.5 w-full rounded-xl border border-suzuki-line px-3 py-2.5 text-sm text-suzuki-navy outline-none focus:ring-2 focus:ring-suzuki-blue/30"
+          />
+        </div>
+
+        <div className="mt-4">
+          <Label>Delivery Attachment</Label>
           <label className="mt-1.5 flex flex-col items-center justify-center gap-2 min-h-[140px] rounded-xl border border-dashed border-sky-200 bg-sky-50 cursor-pointer hover:bg-sky-100 overflow-hidden">
             {podPreview ? (
-              <img src={podPreview} alt="POD preview" className="max-h-40 object-contain" />
+              <img src={podPreview} alt="Delivery attachment preview" className="max-h-40 object-contain" />
             ) : (
               <>
                 <ImageIcon size={28} className="text-suzuki-mute" />
-                <span className="text-sm font-semibold text-suzuki-mute">Click or drag and drop image</span>
+                <span className="text-sm font-semibold text-suzuki-mute px-4 text-center">
+                  Upload photo or document (image, PDF)
+                </span>
               </>
             )}
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,.pdf,.doc,.docx"
               className="hidden"
               onChange={(e) => onFile(e.target.files?.[0] ?? null)}
             />
@@ -930,7 +1421,7 @@ function PodDeliveryModal({
           onClick={onConfirm}
           className="mt-6 w-full rounded-xl bg-suzuki-red text-white font-extrabold py-3.5 tracking-wide hover:bg-red-700 disabled:opacity-50"
         >
-          CONFIRM
+          CONFIRM DELIVERY
         </button>
       </div>
     </div>
@@ -1014,9 +1505,29 @@ function Label({ children }: { children: ReactNode }) {
   return <div className="text-xs font-bold text-suzuki-navy/80">{children}</div>
 }
 
-function StatusPill({ status }: { status: UiOrderStatus }) {
+function StatusPill({
+  status,
+  label,
+  statusColor
+}: {
+  status: UiOrderStatus | string
+  label?: string
+  statusColor?: string | null
+}) {
+  const text = label || status
+  const fromSap =
+    statusColor === 'Green'
+      ? 'bg-emerald-100 text-emerald-700'
+      : statusColor === 'Grey'
+        ? 'bg-slate-200 text-slate-600'
+        : statusColor === 'Yellow'
+          ? 'bg-orange-100 text-orange-700'
+          : statusColor === 'Red'
+            ? 'bg-rose-100 text-rose-700'
+            : null
   const cls =
-    status === 'Completed'
+    fromSap
+    ?? (status === 'Completed'
       ? 'bg-emerald-100 text-emerald-700'
       : status === 'Cancelled'
         ? 'bg-slate-200 text-slate-600'
@@ -1024,26 +1535,11 @@ function StatusPill({ status }: { status: UiOrderStatus }) {
           ? 'bg-orange-100 text-orange-700'
           : status === 'Pending'
             ? 'bg-amber-100 text-amber-800'
-            : 'bg-rose-100 text-rose-700'
+            : 'bg-rose-100 text-rose-700')
 
   return (
-    <span className={clsx('inline-flex rounded-full px-4 py-1.5 text-sm font-bold', cls)}>
-      {status}
+    <span className={clsx('inline-flex rounded-full px-4 py-1.5 text-sm font-bold max-w-full text-left', cls)}>
+      {text}
     </span>
-  )
-}
-
-function PaymentPill({ value }: { value: string }) {
-  const cls =
-    value === 'Received'
-      ? 'bg-emerald-100 text-emerald-700'
-      : value === 'In Approval'
-        ? 'bg-orange-100 text-orange-700'
-        : 'bg-slate-100 text-slate-500'
-
-  return (
-    <div className={clsx('w-full rounded-xl text-center py-2.5 text-sm font-bold', cls)}>
-      {value}
-    </div>
   )
 }

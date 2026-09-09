@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { FileBarChart2, Gift, Image, Settings } from 'lucide-react'
+import { Droplets, FileBarChart2, Gift, Image, Settings } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 
 export default function MorePage() {
@@ -7,9 +7,16 @@ export default function MorePage() {
 
   const items = [
     {
+      to: '/products',
+      title: 'Product master',
+      note: 'Add lubricants through the sequential wizard. Parts fields wait on client master data.',
+      icon: Droplets,
+      roles: ['SuperAdmin', 'Admin']
+    },
+    {
       to: '/promotions',
       title: 'Banner & Promotions',
-      note: 'Newsletter pop-ups and promotion banners for distributors and retailers.',
+      note: 'Header & category banners for Start Order / dashboard, plus login pop-up promotions for distributors and retailers.',
       icon: Image,
       roles: ['SuperAdmin', 'Admin']
     },
@@ -23,16 +30,23 @@ export default function MorePage() {
     {
       to: '/settings',
       title: 'Settings',
-      note: 'Profile information and ship-to-party order threshold.',
+      note: 'Profile, tax thresholds, and product groups for incentive schemes.',
       icon: Settings,
       roles: ['SuperAdmin', 'Admin', 'Distributor']
     },
     {
-      to: '/incentives',
-      title: 'Incentive Management',
-      note: 'Create programs by Liters, Cartons, or Amount.',
+      to: '/incentive-schemes',
+      title: 'Incentive schemes',
+      note: 'Product groups, slab schemes, live evaluation, and distributor PDF reports.',
       icon: Gift,
       roles: ['SuperAdmin', 'Admin']
+    },
+    {
+      to: '/incentives',
+      title: 'Legacy incentives',
+      note: 'View legacy incentive programs, targets, and achievement.',
+      icon: Gift,
+      roles: ['SuperAdmin', 'Admin', 'Distributor']
     }
   ].filter((i) => !role || i.roles.includes(role))
 

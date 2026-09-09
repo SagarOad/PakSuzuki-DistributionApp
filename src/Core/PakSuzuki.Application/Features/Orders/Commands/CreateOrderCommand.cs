@@ -3,6 +3,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
+using PakSuzuki.Application.Features.Orders;
 using PakSuzuki.Domain.Entities;
 using PakSuzuki.Domain.Enums;
 
@@ -14,8 +15,16 @@ public record CreateOrderItemDto(Guid ProductId, decimal Quantity, UnitOfMeasure
 
 public record CreateOrderCommand(
     OrderSourceType Source, Guid? RetailerId, Guid DistributorId, List<CreateOrderItemDto> Items,
-    Guid? OriginatingRetailerOrderId = null
-) : IRequest<Guid>;
+    Guid? OriginatingRetailerOrderId = null,
+    string? VendorCode = null,
+    string? MaterialSourceCode = null,
+    string? DeliveryTypeCode = null,
+    string? DeliveryTypeName = null,
+    string? SupplierCode = null,
+    string? RetailerRemarks = null
+) : IRequest<CreateOrderResult>;
+
+public record CreateOrderResult(Guid Id, string OrderNumber, string Status, string StatusLabel, string Message);
 
 public class CreateOrderCommandValidator : AbstractValidator<CreateOrderCommand>
 {
@@ -30,21 +39,39 @@ public class CreateOrderCommandValidator : AbstractValidator<CreateOrderCommand>
             item.RuleFor(i => i.ProductId).NotEmpty();
             item.RuleFor(i => i.Quantity).GreaterThan(0);
         });
+        RuleFor(x => x.MaterialSourceCode).NotEmpty()
+            .When(x => x.Source == OrderSourceType.DistributorDirectOrder
+                || HasLane(x.MaterialSourceCode, x.DeliveryTypeCode, x.SupplierCode))
+            .WithMessage("Select Local or C.K.D. before placing the order.");
+        RuleFor(x => x.DeliveryTypeCode).NotEmpty()
+            .When(x => x.Source == OrderSourceType.DistributorDirectOrder
+                || HasLane(x.MaterialSourceCode, x.DeliveryTypeCode, x.SupplierCode))
+            .WithMessage("Select a delivery type before placing the order.");
+        RuleFor(x => x.SupplierCode).NotEmpty()
+            .When(x => x.Source == OrderSourceType.DistributorDirectOrder
+                || HasLane(x.MaterialSourceCode, x.DeliveryTypeCode, x.SupplierCode))
+            .WithMessage("Select a supplier before placing the order.");
     }
+
+    private static bool HasLane(string? source, string? delivery, string? supplier) =>
+        !string.IsNullOrWhiteSpace(source) || !string.IsNullOrWhiteSpace(delivery) || !string.IsNullOrWhiteSpace(supplier);
 }
 
-public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Guid>
+public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, CreateOrderResult>
 {
     private readonly IApplicationDbContext _context;
     private readonly IDateTimeService _dateTime;
+    private readonly IAppNotificationService _notifications;
 
-    public CreateOrderCommandHandler(IApplicationDbContext context, IDateTimeService dateTime)
+    public CreateOrderCommandHandler(
+        IApplicationDbContext context, IDateTimeService dateTime, IAppNotificationService notifications)
     {
         _context = context;
         _dateTime = dateTime;
+        _notifications = notifications;
     }
 
-    public async Task<Guid> Handle(CreateOrderCommand request, CancellationToken ct)
+    public async Task<CreateOrderResult> Handle(CreateOrderCommand request, CancellationToken ct)
     {
         var distributor = await _context.Distributors.FirstOrDefaultAsync(d => d.Id == request.DistributorId, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Distributor), request.DistributorId);
@@ -76,42 +103,150 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
             : OrderStatus.PendingDistributorApproval;
 
         Guid? originatingRetailerOrderId = null;
+        Domain.Entities.Order? originatingOrder = null;
         if (request.Source == OrderSourceType.DistributorDirectOrder
             && request.OriginatingRetailerOrderId is Guid originId)
         {
-            var origin = await _context.Orders.FirstOrDefaultAsync(o => o.Id == originId, ct)
+            originatingOrder = await _context.Orders.FirstOrDefaultAsync(o => o.Id == originId, ct)
                 ?? throw new NotFoundException(nameof(Domain.Entities.Order), originId);
 
-            if (origin.Source != OrderSourceType.RetailerOrder)
+            if (originatingOrder.Source != OrderSourceType.RetailerOrder)
                 throw new ConflictException("Originating order must be a retailer order.");
-            if (origin.DistributorId != distributor.Id)
+            if (originatingOrder.DistributorId != distributor.Id)
                 throw new ForbiddenAccessException("Originating retailer order is not under your distributorship.");
-            if (origin.Status is not (OrderStatus.PendingDistributorApproval or OrderStatus.SentBackForModification))
+            if (originatingOrder.Status is not (OrderStatus.PendingDistributorApproval or OrderStatus.SentBackForModification))
                 throw new ConflictException(
-                    $"Retailer order is in status '{origin.Status}' and cannot be ordered to manufacturer.");
+                    $"Retailer order is in status '{originatingOrder.Status}' and cannot be ordered to manufacturer.");
 
-            originatingRetailerOrderId = origin.Id;
+            originatingRetailerOrderId = originatingOrder.Id;
+        }
+
+        // Load products first so manufacturer orders can take the lane from the cart SKUs
+        // (avoids Start Order header mismatch like Local vs C.K.D.).
+        var productIds = request.Items.Select(i => i.ProductId).Distinct().ToList();
+        var products = await _context.Products
+            .Include(p => p.PriceHistory)
+            .Include(p => p.Variants)
+            .Include(p => p.CatalogProfile).ThenInclude(c => c!.PType)
+            .Where(p => productIds.Contains(p.Id))
+            .ToDictionaryAsync(p => p.Id, ct);
+
+        string? laneSource = OrderLaneCodes.NormalizeSource(request.MaterialSourceCode);
+        string? laneDelivery = string.IsNullOrWhiteSpace(request.DeliveryTypeCode) ? null : request.DeliveryTypeCode.Trim();
+        string? laneDeliveryName = string.IsNullOrWhiteSpace(request.DeliveryTypeName) ? null : request.DeliveryTypeName.Trim();
+        string? laneSupplier = string.IsNullOrWhiteSpace(request.SupplierCode) ? null : request.SupplierCode.Trim();
+
+        if (request.Source == OrderSourceType.DistributorDirectOrder)
+        {
+            // Prefer originating retailer order lane when forwarding that order.
+            if (originatingOrder != null
+                && (!string.IsNullOrWhiteSpace(originatingOrder.MaterialSourceCode)
+                    || !string.IsNullOrWhiteSpace(originatingOrder.DeliveryTypeCode)))
+            {
+                laneSource = OrderLaneCodes.NormalizeSource(originatingOrder.MaterialSourceCode) ?? laneSource;
+                laneDelivery = string.IsNullOrWhiteSpace(originatingOrder.DeliveryTypeCode)
+                    ? laneDelivery
+                    : originatingOrder.DeliveryTypeCode.Trim();
+                laneDeliveryName = string.IsNullOrWhiteSpace(originatingOrder.DeliveryTypeName)
+                    ? laneDeliveryName
+                    : originatingOrder.DeliveryTypeName.Trim();
+                laneSupplier = string.IsNullOrWhiteSpace(originatingOrder.SupplierCode)
+                    ? laneSupplier
+                    : originatingOrder.SupplierCode.Trim();
+            }
+
+            // Always align manufacturer PO lane to the products in the cart (must be one lane).
+            ProductCatalogProfile? firstProfile = null;
+            foreach (var item in request.Items)
+            {
+                if (!products.TryGetValue(item.ProductId, out var product))
+                    throw new NotFoundException(nameof(Domain.Entities.Product), item.ProductId);
+                var profile = product.CatalogProfile
+                    ?? throw new ConflictException($"Product '{product.Name}' is missing master catalog data and cannot be ordered.");
+                if (product.CatalogProfile?.Discontinued == true)
+                    throw new ConflictException($"Product '{product.Name}' is discontinued and cannot be ordered.");
+
+                if (firstProfile is null)
+                {
+                    firstProfile = profile;
+                    continue;
+                }
+
+                if (!OrderLaneCodes.SameSource(firstProfile.SourceCode, profile.SourceCode)
+                    || !OrderLaneCodes.SameCode(firstProfile.PType.Code, profile.PType.Code)
+                    || !OrderLaneCodes.SameCode(firstProfile.SupplierCode, profile.SupplierCode))
+                {
+                    throw new ConflictException(
+                        "Cart mixes different source / delivery type / supplier products. Start a separate manufacturer order for each lane.");
+                }
+            }
+
+            if (firstProfile != null)
+            {
+                laneSource = OrderLaneCodes.NormalizeSource(firstProfile.SourceCode);
+                laneDelivery = firstProfile.PType.Code;
+                laneDeliveryName = firstProfile.PType.DeliveryType;
+                laneSupplier = firstProfile.SupplierCode;
+            }
         }
 
         var order = new Order
         {
             Source = request.Source,
             RetailerId = retailer?.Id,
+            Retailer = retailer,
             DistributorId = distributor.Id,
+            Distributor = distributor,
             OriginatingRetailerOrderId = originatingRetailerOrderId,
             Status = initialStatus,
-            OrderNumber = await GenerateOrderNumberAsync(request.Source, distributor.DistributorCode, retailer?.RetailerCode, ct)
+            OrderNumber = await GenerateOrderNumberAsync(request.Source, distributor.DistributorCode, retailer?.RetailerCode, ct),
+            VendorCode = string.IsNullOrWhiteSpace(request.VendorCode) ? "PSMC" : request.VendorCode.Trim(),
+            MaterialSourceCode = laneSource,
+            DeliveryTypeCode = laneDelivery,
+            DeliveryTypeName = laneDeliveryName,
+            SupplierCode = laneSupplier,
+            RetailerRemarks = string.IsNullOrWhiteSpace(request.RetailerRemarks)
+                ? null
+                : request.RetailerRemarks.Trim()
         };
 
         decimal subTotal = 0, totalGst = 0, totalFed = 0;
 
+        var taxRules = await _context.TaxRules.AsNoTracking()
+            .Where(t => t.IsActive)
+            .ToListAsync(ct);
+        static decimal TaxRulePercent(IEnumerable<TaxRule> rules, string code) =>
+            Math.Round((rules.FirstOrDefault(t => t.Code == code)?.Rate ?? 0m) * 100, 2);
+        var systemGstPercent = TaxRulePercent(taxRules, "GST");
+        var systemFedPercent = TaxRulePercent(taxRules, "FED");
+
         foreach (var item in request.Items)
         {
-            var product = await _context.Products
-                .Include(p => p.PriceHistory)
-                .Include(p => p.Variants)
-                .FirstOrDefaultAsync(p => p.Id == item.ProductId, ct)
-                ?? throw new NotFoundException(nameof(Domain.Entities.Product), item.ProductId);
+            if (!products.TryGetValue(item.ProductId, out var product))
+                throw new NotFoundException(nameof(Domain.Entities.Product), item.ProductId);
+
+            if (product.CatalogProfile?.Discontinued == true)
+                throw new ConflictException($"Product '{product.Name}' is discontinued and cannot be ordered.");
+
+            var enforceLane = request.Source == OrderSourceType.DistributorDirectOrder
+                || !string.IsNullOrWhiteSpace(request.MaterialSourceCode);
+            if (enforceLane)
+            {
+                var profile = product.CatalogProfile
+                    ?? throw new ConflictException($"Product '{product.Name}' is missing master catalog data and cannot be ordered.");
+
+                if (!OrderLaneCodes.SameSource(profile.SourceCode, order.MaterialSourceCode))
+                    throw new ConflictException(
+                        $"Product '{product.Name}' is source '{profile.SourceCode}', but this order is '{order.MaterialSourceCode}'. Start a separate order for each source.");
+
+                if (!OrderLaneCodes.SameCode(profile.PType.Code, order.DeliveryTypeCode))
+                    throw new ConflictException(
+                        $"Product '{product.Name}' is delivery type '{profile.PType.Code}', but this order is '{order.DeliveryTypeCode}'. Start a separate order for each delivery type.");
+
+                if (!OrderLaneCodes.SameCode(profile.SupplierCode, order.SupplierCode))
+                    throw new ConflictException(
+                        $"Product '{product.Name}' is supplier '{profile.SupplierCode}', but this order is '{order.SupplierCode}'. Start a separate order for each supplier.");
+            }
 
             ProductVariant? variant = null;
             if (item.ProductVariantId is Guid variantId)
@@ -119,6 +254,12 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
                 variant = product.Variants.FirstOrDefault(v => v.Id == variantId)
                     ?? throw new NotFoundException(nameof(ProductVariant), variantId);
             }
+
+            // Prices are per pack/carton. Convert Liter/Bottle qty into packs so threshold + totals stay correct.
+            var (packQty, orderUnit) = OrderPackQuantity.NormalizeToOrderUnit(item.Quantity, item.Unit, product);
+            if (packQty <= 0)
+                throw new ConflictException(
+                    $"Quantity for '{product.Name}' converts to zero packs. Order by carton/pack (or send enough liters for one pack).");
 
             var currentPrice = product.PriceHistory.FirstOrDefault(pp => pp.IsCurrent);
             decimal unitPrice;
@@ -131,8 +272,13 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
                 unitPrice = request.Source == OrderSourceType.DistributorDirectOrder
                     ? variant.DistributorPrice
                     : variant.RetailPrice;
-                gstPercent = variant.GstPercent;
-                fedPercent = variant.FedPercent;
+                // Prefer variant tax; fall back to current price row when variant tax was never set.
+                gstPercent = variant.GstPercent > 0
+                    ? variant.GstPercent
+                    : currentPrice?.GstPercent ?? 0;
+                fedPercent = variant.FedPercent > 0
+                    ? variant.FedPercent
+                    : currentPrice?.FedPercent ?? 0;
             }
             else
             {
@@ -143,17 +289,21 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
                 fedPercent = currentPrice.FedPercent;
             }
 
-            var lineSubTotal = unitPrice * item.Quantity;
+            if (gstPercent <= 0) gstPercent = systemGstPercent;
+            if (fedPercent <= 0) fedPercent = systemFedPercent;
+
+            var lineSubTotal = unitPrice * packQty;
             var lineGst = lineSubTotal * gstPercent / 100;
             var lineFed = lineSubTotal * fedPercent / 100;
 
             order.Items.Add(new OrderItem
             {
                 ProductId = product.Id,
+                Product = product,
                 ProductVariantId = variant?.Id,
                 VariantTypeName = variant?.TypeName,
-                RequestedQuantity = item.Quantity,
-                RequestedUnit = item.Unit,
+                RequestedQuantity = packQty,
+                RequestedUnit = orderUnit,
                 UnitPrice = unitPrice,
                 LineSubTotal = lineSubTotal,
                 LineGst = lineGst,
@@ -165,20 +315,25 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
             totalFed += lineFed;
         }
 
-        var whtPercent = 0m; // resolved below to avoid re-querying per item
-        var firstPrice = await _context.Products.Include(p => p.PriceHistory)
-            .Where(p => order.Items.Select(i => i.ProductId).Contains(p.Id))
-            .SelectMany(p => p.PriceHistory.Where(pp => pp.IsCurrent))
-            .MaxAsync(pp => (decimal?)pp.WhtPercent, ct) ?? 0m;
-        whtPercent = firstPrice;
+        var whtPercent = await OrderWhtCalculator.GetSystemPercentAsync(_context, ct);
 
-        order.SubTotal = subTotal;
-        order.TotalGst = totalGst;
-        order.TotalFed = totalFed;
-        order.WhtAmount = subTotal * whtPercent / 100;
-        order.GrandTotal = subTotal + totalGst + totalFed + order.WhtAmount;
+        order.SubTotal = Math.Round(subTotal, 2, MidpointRounding.AwayFromZero);
+        order.TotalGst = Math.Round(totalGst, 2, MidpointRounding.AwayFromZero);
+        order.TotalFed = Math.Round(totalFed, 2, MidpointRounding.AwayFromZero);
+        // One WHT amount on the order total — not summed from per-product lines.
+        order.WhtAmount = OrderWhtCalculator.AmountFromSubTotal(order.SubTotal, whtPercent);
+        order.GrandTotal = order.SubTotal + order.TotalGst + order.TotalFed + order.WhtAmount;
 
         if (retailer != null) retailer.LastOrderAtUtc = _dateTime.UtcNow;
+
+        if (request.Source == OrderSourceType.DistributorDirectOrder)
+            SapPartnerCodes.ApplyDistributorDirectCodes(order);
+        else
+        {
+            order.DistributorCode = SapPartnerCodes.Distributor(distributor);
+            order.ThresholdMet = await OrderThresholdEvaluator.IsMetAsync(
+                _context, distributor.Id, order.Items.ToList(), ct);
+        }
 
         _context.Orders.Add(order);
 
@@ -194,7 +349,53 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Gui
         }
 
         await _context.SaveChangesAsync(ct);
-        return order.Id;
+
+        var isRetailer = request.Source == OrderSourceType.RetailerOrder;
+        var link = $"/orders/{order.Id}";
+        if (isRetailer && retailer != null)
+        {
+            await _notifications.NotifyDistributorAsync(
+                distributor.Id,
+                "New retailer order",
+                $"{retailer.Name} placed order {order.OrderNumber}. Please review.",
+                NotificationCategories.Order,
+                link,
+                order.Id,
+                ct);
+        }
+        else
+        {
+            await _notifications.NotifyStaffAsync(
+                "New distributor order",
+                $"{distributor.Name} placed order {order.OrderNumber} for Pak Suzuki review.",
+                NotificationCategories.Order,
+                link,
+                order.Id,
+                ct);
+
+            if (originatingRetailerOrderId is Guid originNotifyId && originatingOrder?.RetailerId is Guid originRetailerId)
+            {
+                await _notifications.NotifyRetailerAsync(
+                    originRetailerId,
+                    "Order forwarded to manufacturer",
+                    $"Your order is being processed with the manufacturer ({order.OrderNumber}).",
+                    NotificationCategories.Order,
+                    $"/orders/{originNotifyId}",
+                    originNotifyId,
+                    ct);
+            }
+        }
+
+        var message = isRetailer
+            ? $"Order {order.OrderNumber} placed successfully. Your distributor will review it shortly."
+            : $"Order {order.OrderNumber} placed successfully.";
+
+        return new CreateOrderResult(
+            order.Id,
+            order.OrderNumber,
+            order.Status.ToString(),
+            OrderStatusDisplay.ForViewer(order.Status, isRetailer),
+            message);
     }
 
     // Format from doc: PO4WR/00020/26/00005 -> PO + channel(4W/2W/OBM) + R|D + codes + year + cycle.

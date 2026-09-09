@@ -10,13 +10,28 @@ export interface CartLine {
   imageUrl?: string | null
   packLabel: string
   unitPrice: number
+  /** Variant GST % — same basis as order creation (line subtotal × %). */
+  gstPercent?: number
+  /** Variant FED % — same basis as order creation. */
+  fedPercent?: number
   quantity: number
   unit?: string
 }
 
+/** Header lane for a manufacturer PO — one source + delivery type + supplier per cart. */
+export interface OrderContext {
+  vendorCode: string
+  vendorName: string
+  materialSourceCode: string
+  deliveryTypeCode: string
+  deliveryTypeName: string
+  supplierCode: string
+  supplierName: string
+}
+
 interface CartMeta {
-  /** Retailer order this manufacturer cart was built from (future / Super Admin link). */
   originatingRetailerOrderId: string | null
+  orderContext: OrderContext | null
 }
 
 interface CartContextValue {
@@ -24,13 +39,17 @@ interface CartContextValue {
   itemCount: number
   subTotal: number
   originatingRetailerOrderId: string | null
-  /** Brief pulse/toast after Add to Cart */
+  orderContext: OrderContext | null
   justAdded: boolean
   addItem: (line: Omit<CartLine, 'quantity'>, qty?: number) => void
   setQuantity: (productId: string, variantId: string, quantity: number) => void
   removeItem: (productId: string, variantId: string) => void
-  /** Replace cart contents (e.g. Order to Manufacturer from a retailer order). */
+  syncTaxRates: (
+    rates: Record<string, { gstPercent: number; fedPercent: number }>
+  ) => void
   replaceFromRetailerOrder: (lines: CartLine[], originatingRetailerOrderId: string) => void
+  setOrderContext: (ctx: OrderContext, options?: { clearCart?: boolean }) => void
+  clearOrderContext: () => void
   clear: () => void
 }
 
@@ -52,11 +71,14 @@ function loadCart(): CartLine[] {
 function loadMeta(): CartMeta {
   try {
     const raw = localStorage.getItem(META_KEY)
-    if (!raw) return { originatingRetailerOrderId: null }
+    if (!raw) return { originatingRetailerOrderId: null, orderContext: null }
     const parsed = JSON.parse(raw) as CartMeta
-    return { originatingRetailerOrderId: parsed?.originatingRetailerOrderId ?? null }
+    return {
+      originatingRetailerOrderId: parsed?.originatingRetailerOrderId ?? null,
+      orderContext: parsed?.orderContext ?? null
+    }
   } catch {
-    return { originatingRetailerOrderId: null }
+    return { originatingRetailerOrderId: null, orderContext: null }
   }
 }
 
@@ -85,7 +107,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
         const idx = prev.findIndex((x) => x.productId === line.productId && x.variantId === line.variantId)
         if (idx >= 0) {
           const next = [...prev]
-          next[idx] = { ...next[idx], quantity: next[idx].quantity + qty }
+          const existing = next[idx]
+          next[idx] = {
+            ...existing,
+            quantity: existing.quantity + qty,
+            unitPrice: line.unitPrice,
+            gstPercent: line.gstPercent ?? existing.gstPercent,
+            fedPercent: line.fedPercent ?? existing.fedPercent
+          }
           return next
         }
         return [...prev, { ...line, quantity: qty }]
@@ -109,12 +138,35 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setItems((prev) => prev.filter((x) => !(x.productId === productId && x.variantId === variantId)))
     }
 
+    const syncTaxRates: CartContextValue['syncTaxRates'] = (rates) => {
+      setItems((prev) => {
+        let changed = false
+        const next = prev.map((item) => {
+          const rate = rates[item.variantId]
+          if (!rate) return item
+          if (item.gstPercent === rate.gstPercent && item.fedPercent === rate.fedPercent) return item
+          changed = true
+          return { ...item, gstPercent: rate.gstPercent, fedPercent: rate.fedPercent }
+        })
+        return changed ? next : prev
+      })
+    }
+
     const replaceFromRetailerOrder: CartContextValue['replaceFromRetailerOrder'] = (
       lines,
       originatingRetailerOrderId
     ) => {
       setItems(lines.filter((l) => l.quantity > 0))
-      setMeta({ originatingRetailerOrderId })
+      setMeta((prev) => ({ ...prev, originatingRetailerOrderId }))
+    }
+
+    const setOrderContext: CartContextValue['setOrderContext'] = (ctx, options) => {
+      const clearCart = options?.clearCart !== false
+      setMeta((prev) => ({ ...prev, orderContext: ctx }))
+      if (clearCart) {
+        setItems([])
+        setMeta((prev) => ({ ...prev, orderContext: ctx, originatingRetailerOrderId: null }))
+      }
     }
 
     return {
@@ -122,17 +174,24 @@ export function CartProvider({ children }: { children: ReactNode }) {
       itemCount: items.reduce((s, i) => s + i.quantity, 0),
       subTotal: items.reduce((s, i) => s + i.unitPrice * i.quantity, 0),
       originatingRetailerOrderId: meta.originatingRetailerOrderId,
+      orderContext: meta.orderContext,
       justAdded,
       addItem,
       setQuantity,
       removeItem,
+      syncTaxRates,
       replaceFromRetailerOrder,
+      setOrderContext,
+      clearOrderContext: () => {
+        setItems([])
+        setMeta({ originatingRetailerOrderId: null, orderContext: null })
+      },
       clear: () => {
         setItems([])
-        setMeta({ originatingRetailerOrderId: null })
+        setMeta((prev) => ({ ...prev, originatingRetailerOrderId: null }))
       }
     }
-  }, [items, justAdded, meta.originatingRetailerOrderId])
+  }, [items, justAdded, meta])
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>
 }
@@ -141,4 +200,13 @@ export function useCart() {
   const ctx = useContext(CartContext)
   if (!ctx) throw new Error('useCart must be used within CartProvider')
   return ctx
+}
+
+export function catalogFilterParams(ctx: OrderContext | null | undefined) {
+  if (!ctx) return {}
+  return {
+    materialSourceCode: ctx.materialSourceCode,
+    deliveryTypeCode: ctx.deliveryTypeCode,
+    supplierCode: ctx.supplierCode
+  }
 }

@@ -4,6 +4,7 @@ import { User, Mail, Phone, MapPin, Building2, Store } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuthStore } from '@/context/authStore'
 import { useCart } from '@/context/CartContext'
+import { useOrderTaxEstimate } from '@/hooks/useOrderTaxEstimate'
 import { ProductTitle } from './catalogTypes'
 import type { ReactNode } from 'react'
 
@@ -21,9 +22,12 @@ interface DistributorProfile {
   businessName: string
 }
 
+/** Order summary before payment — distributor → Pak Suzuki (manufacturer) orders only. */
 export default function OrderSummaryPage() {
   const navigate = useNavigate()
-  const { items, subTotal } = useCart()
+  const { items, orderContext } = useCart()
+  const { subTotal, gstPercent, gstAmount, fedAmount, whtPercent, whtAmount, estimatedTotal } =
+    useOrderTaxEstimate(items)
   const profileId = useAuthStore((s) => s.profileId)
 
   const profileQuery = useQuery({
@@ -39,10 +43,26 @@ export default function OrderSummaryPage() {
         <p className="text-sm text-suzuki-mute">No items to checkout.</p>
         <button
           type="button"
-          onClick={() => navigate('/')}
+          onClick={() => navigate(orderContext ? '/' : '/order/start')}
           className="text-sm font-bold text-suzuki-blue hover:underline"
         >
           Continue shopping
+        </button>
+      </div>
+    )
+  }
+
+  if (!orderContext) {
+    return (
+      <div className="bg-white rounded-2xl border border-suzuki-line shadow-card p-10 text-center space-y-3">
+        <h1 className="text-2xl font-extrabold text-suzuki-navy">Order Summary</h1>
+        <p className="text-sm text-suzuki-mute">Choose source, delivery type, and supplier before checkout.</p>
+        <button
+          type="button"
+          onClick={() => navigate('/order/start')}
+          className="rounded-lg bg-suzuki-red text-white text-sm font-bold px-5 py-2.5"
+        >
+          Start order
         </button>
       </div>
     )
@@ -52,8 +72,13 @@ export default function OrderSummaryPage() {
 
   return (
     <div className="space-y-5 pb-10">
+      <div className="rounded-xl border border-suzuki-line bg-white px-4 py-3 text-sm shadow-sm">
+        <span className="font-bold text-suzuki-navy">PO lane: </span>
+        <span className="text-suzuki-mute">
+          {orderContext.vendorName} · {orderContext.materialSourceCode} · {orderContext.deliveryTypeCode} ({orderContext.deliveryTypeName}) · {orderContext.supplierCode}
+        </span>
+      </div>
       <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-5">
-        {/* Order Summary */}
         <section className="bg-white rounded-2xl border border-suzuki-line shadow-card overflow-hidden">
           <div className="divide-y divide-suzuki-line">
             {items.map((item) => (
@@ -100,16 +125,37 @@ export default function OrderSummaryPage() {
               </div>
             ))}
           </div>
-          <div className="px-5 sm:px-6 py-4 border-t border-suzuki-line bg-suzuki-mist/40">
-            <p className="text-base font-extrabold text-suzuki-navy">
-              Grand Total: <span className="text-suzuki-red">{formatRs(subTotal)}</span>
+          <div className="px-5 sm:px-6 py-4 border-t border-suzuki-line bg-suzuki-mist/40 space-y-1">
+            <p className="text-sm font-bold text-suzuki-navy flex justify-between gap-6">
+              <span>Subtotal</span>
+              <span className="text-suzuki-red">{formatRs(subTotal)}</span>
+            </p>
+            <p className="text-sm font-semibold text-suzuki-mute flex justify-between gap-6">
+              <span>GST TAX ({gstPercent}%)</span>
+              <span className="text-suzuki-navy">{formatRs(gstAmount)}</span>
+            </p>
+            {fedAmount > 0 && (
+              <p className="text-sm font-semibold text-suzuki-mute flex justify-between gap-6">
+                <span>FED</span>
+                <span className="text-suzuki-navy">{formatRs(fedAmount)}</span>
+              </p>
+            )}
+            <p className="text-sm font-semibold text-suzuki-mute flex justify-between gap-6">
+              <span>WHT ({whtPercent}%)</span>
+              <span className="text-suzuki-navy">{formatRs(whtAmount)}</span>
+            </p>
+            <p className="text-base font-extrabold text-suzuki-navy flex justify-between gap-6 pt-1">
+              <span>Total Amount</span>
+              <span className="text-suzuki-red">{formatRs(estimatedTotal)}</span>
+            </p>
+            <p className="text-xs text-suzuki-mute pt-1">
+              Same tax breakdown as on the order after placement. Next step: payment to Pak Suzuki (Haball — coming soon).
             </p>
           </div>
         </section>
 
-        {/* Distributor Details */}
         <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 sm:p-6 h-fit">
-          <h2 className="text-lg font-extrabold text-suzuki-navy mb-4">Distributor Details</h2>
+          <h2 className="text-lg font-extrabold text-suzuki-navy mb-4">Your Details</h2>
           {profileQuery.isLoading ? (
             <p className="text-sm text-suzuki-mute">Loading profile…</p>
           ) : (
@@ -128,7 +174,7 @@ export default function OrderSummaryPage() {
             onClick={() => navigate('/checkout/payment')}
             className="mt-6 w-full rounded-xl bg-suzuki-red text-white font-extrabold py-3.5 hover:bg-red-700 transition-colors"
           >
-            Add Card
+            Proceed to Payment
           </button>
         </section>
       </div>
