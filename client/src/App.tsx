@@ -57,10 +57,6 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/overview" element={<DistributorDashboard />} />
           <Route path="/map" element={<MapViewPage />} />
-          <Route path="/shop" element={<MyShopPage />} />
-          <Route path="/shop/header-banners/:id" element={<BannerFormPage mode="header" />} />
-          <Route path="/shop/category-banners/:id" element={<BannerFormPage mode="category" />} />
-          <Route path="/shop/products/:id" element={<ProductDetailsPage />} />
           <Route path="/order/start" element={<StartOrderPage />} />
           <Route path="/catalog/products/:id" element={<CatalogProductPage />} />
           <Route path="/catalog/:categoryKey" element={<LubricantCategoryPage />} />
@@ -68,9 +64,13 @@ export default function App() {
           <Route path="/checkout/summary" element={<OrderSummaryPage />} />
           <Route path="/checkout/payment" element={<PaymentPage />} />
           <Route path="/orders" element={<OrdersPage />} />
-          <Route path="/orders/middleware" element={<MiddlewarePickupPage />} />
-          <Route path="/orders/:id/amend" element={<AmendOrderPage />} />
           <Route path="/orders/:id" element={<OrderDetailsPage />} />
+          <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin', 'Distributor']} />}>
+            <Route path="/orders/:id/amend" element={<AmendOrderPage />} />
+          </Route>
+          <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin']} />}>
+            <Route path="/orders/middleware" element={<MiddlewarePickupPage />} />
+          </Route>
           <Route path="/claims" element={<ClaimsPage />} />
           <Route path="/claims/:id" element={<ClaimDetailsPage />} />
           <Route path="/more" element={<MorePage />} />
@@ -89,6 +89,10 @@ export default function App() {
           </Route>
 
           <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin']} />}>
+            <Route path="/shop" element={<MyShopPage />} />
+            <Route path="/shop/header-banners/:id" element={<BannerFormPage mode="header" />} />
+            <Route path="/shop/category-banners/:id" element={<BannerFormPage mode="category" />} />
+            <Route path="/shop/products/:id" element={<ProductDetailsPage />} />
             <Route path="/distributors" element={<DistributorsPage />} />
             <Route path="/promotions" element={<PromotionsPage />} />
             <Route path="/incentives/new" element={<IncentiveFormPage />} />

@@ -48,7 +48,7 @@ export interface CatalogCategory {
 export interface CatalogLookups {
   productTypes: CatalogType[]
   categories: CatalogCategory[]
-  sources: { code: string; name: string }[]
+  sources: { code: string; name: string; isReady?: boolean; notReadyMessage?: string | null }[]
   suppliers: { code: string; name: string }[]
   gstInvoiceTypes: { code: string; name: string }[]
   taxRules: { id: string; code: string; rate: number; appliesTo: string; isActive: boolean }[]
@@ -82,6 +82,7 @@ export interface MasterProductRow {
   category: string
   pType?: string | null
   source?: string | null
+  supplier?: string | null
   packQuantity: number
   unitValue: number
   unitType: string

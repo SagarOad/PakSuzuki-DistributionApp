@@ -4,7 +4,7 @@ namespace PakSuzuki.Application.Features.CatalogMaster;
 
 public record CatalogTypeDto(Guid Id, string Code, string Name, bool IsReady, string? NotReadyMessage, int SortOrder);
 
-public record CatalogSourceDto(string Code, string Name);
+public record CatalogSourceDto(string Code, string Name, bool IsReady = true, string? NotReadyMessage = null);
 
 public record CatalogSupplierDto(string Code, string Name);
 
@@ -60,6 +60,7 @@ public record MasterProductListDto(
     string Category,
     string? PType,
     string? Source,
+    string? Supplier,
     int PackQuantity,
     decimal UnitValue,
     string UnitType,

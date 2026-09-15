@@ -16,6 +16,7 @@ src/Presentation/PakSuzuki.WebApi/wwwroot/*
 ## Logs / uploads / local email previews
 logs/
 src/Presentation/PakSuzuki.WebApi/wwwroot/uploads/
+src/Presentation/PakSuzuki.WebApi/App_Data/
 src/Presentation/PakSuzuki.WebApi/email-outbox/
 
 ## Secrets

@@ -63,6 +63,9 @@ public class CatalogSource : AuditableEntity
 {
     public string Code { get; set; } = default!;
     public string Name { get; set; } = default!;
+    /// <summary>False while master SKU data for this source is still awaited (e.g. In house).</summary>
+    public bool IsReady { get; set; } = true;
+    public string? NotReadyMessage { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; } = true;
 }

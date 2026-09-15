@@ -77,8 +77,10 @@ export function categorySlug(name: string) {
 export const BANNER_ASPECT = {
   Header: { ratio: 16 / 5, label: '16:5 (wide header)' },
   Category: { ratio: 16 / 10, label: '16:10 (category card)' },
-  NewsletterPopUp: { ratio: 335 / 156, label: '335×156' },
-  PromotionBanner: { ratio: 1, label: '1:1 square' }
+  LoginPopup: { ratio: 4 / 3, label: '4:3 (login popup)' },
+  // Legacy aliases map to the same popup ratio.
+  NewsletterPopUp: { ratio: 4 / 3, label: '4:3 (login popup)' },
+  PromotionBanner: { ratio: 4 / 3, label: '4:3 (login popup)' }
 } as const
 
 export type BannerAspectKind = keyof typeof BANNER_ASPECT

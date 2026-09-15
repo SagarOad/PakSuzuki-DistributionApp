@@ -6,7 +6,7 @@ import { useAuth } from '@/context/AuthContext'
 import { catalogFilterParams, useCart } from '@/context/CartContext'
 import { ProductCard } from './ProductCard'
 import { OrderLaneFilters } from './OrderLaneFilters'
-import type { CatalogBanner, CatalogProductCard } from './catalogTypes'
+import { packSummary, type CatalogBanner, type CatalogProductCard } from './catalogTypes'
 import { categorySlug } from '@/pages/Shop/shopTypes'
 
 interface Paged<T> {
@@ -75,7 +75,10 @@ export default function DistributorHomePage() {
         description: detail.description,
         categoryName: detail.categoryName,
         imageUrl: detail.primaryImageUrl,
-        packLabel: variant.typeName,
+        packLabel: packSummary(product) || variant.typeName,
+        packQuantity: product.packQuantity ?? null,
+        unitValue: product.unitValue ?? null,
+        unitType: product.unitType ?? null,
         unitPrice: isRetailer
           ? variant.retailPrice || product.displayPrice
           : variant.distributorPrice || variant.retailPrice || product.displayPrice,
@@ -124,7 +127,7 @@ export default function DistributorHomePage() {
 
       <section className="space-y-3">
         <div>
-          <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">Catalog</h2>
+          <h2 className="text-xl sm:text-2xl font-extrabold text-suzuki-navy">Start Order</h2>
           <p className="text-xs text-suzuki-mute mt-0.5">
             {isRetailer
               ? 'Choose your order lane below, then add packs at retail price. Orders go to your distributor.'

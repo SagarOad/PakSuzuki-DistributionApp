@@ -84,13 +84,17 @@ public class GetCatalogProductsQueryHandler : IRequestHandler<GetCatalogProducts
         if (!string.IsNullOrWhiteSpace(request.MaterialSourceCode))
         {
             var source = OrderLaneCodes.NormalizeSource(request.MaterialSourceCode) ?? request.MaterialSourceCode.Trim();
-            // Accept C.K.D / C.K.D. / CKD from clients while matching stored master values.
+            // Accept client/master variants (C.K.D / CKD, Inhouse / In house, etc.).
             query = query.Where(p => p.CatalogProfile != null
                 && (p.CatalogProfile.SourceCode == source
                     || (source == "C.K.D."
                         && (p.CatalogProfile.SourceCode == "C.K.D"
                             || p.CatalogProfile.SourceCode == "C.K.D."
-                            || p.CatalogProfile.SourceCode == "CKD"))));
+                            || p.CatalogProfile.SourceCode == "CKD"))
+                    || (source == "In house"
+                        && (p.CatalogProfile.SourceCode == "In house"
+                            || p.CatalogProfile.SourceCode == "Inhouse"
+                            || p.CatalogProfile.SourceCode == "IH"))));
         }
 
         if (!string.IsNullOrWhiteSpace(request.DeliveryTypeCode))

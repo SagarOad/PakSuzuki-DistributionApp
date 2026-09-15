@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Common.Models;
+using PakSuzuki.Application.Features.Orders;
 using PakSuzuki.Domain.Entities;
 
 namespace PakSuzuki.Application.Features.CatalogMaster;
@@ -39,7 +40,7 @@ public class GetMasterCatalogLookupsQueryHandler
         var sources = await _context.CatalogSources.AsNoTracking()
             .Where(s => s.IsActive)
             .OrderBy(s => s.SortOrder)
-            .Select(s => new CatalogSourceDto(s.Code, s.Name))
+            .Select(s => new CatalogSourceDto(s.Code, s.Name, s.IsReady, s.NotReadyMessage))
             .ToListAsync(ct);
 
         var suppliers = await _context.CatalogSuppliers.AsNoTracking()
@@ -172,7 +173,7 @@ public class GetWizardDefaultsQueryHandler : IRequestHandler<GetWizardDefaultsQu
             .ToListAsync(ct);
 
         return rules
-            .Where(r => r.SourceCode is null || r.SourceCode == source)
+            .Where(r => r.SourceCode is null || OrderLaneCodes.SameSource(r.SourceCode, source))
             .Where(r => r.ModelCode is null || string.Equals(r.ModelCode, model, StringComparison.OrdinalIgnoreCase))
             .Select(r => r.SupplierCode)
             .FirstOrDefault();
@@ -193,7 +194,16 @@ public class GetWizardDefaultsQueryHandler : IRequestHandler<GetWizardDefaultsQu
     }
 }
 
-public record GetMasterProductsQuery(string ViewerRole, string? Search, Guid? CategoryId, int PageNumber = 1, int PageSize = 50)
+public record GetMasterProductsQuery(
+    string ViewerRole,
+    string? Search,
+    Guid? CategoryId,
+    Guid? ProductTypeId = null,
+    Guid? PTypeId = null,
+    string? SourceCode = null,
+    string? SupplierCode = null,
+    int PageNumber = 1,
+    int PageSize = 50)
     : IRequest<PaginatedList<MasterProductListDto>>;
 
 public class GetMasterProductsQueryHandler : IRequestHandler<GetMasterProductsQuery, PaginatedList<MasterProductListDto>>
@@ -221,13 +231,37 @@ public class GetMasterProductsQueryHandler : IRequestHandler<GetMasterProductsQu
         if (request.CategoryId is Guid categoryId)
             query = query.Where(p => p.CategoryId == categoryId);
 
+        if (request.ProductTypeId is Guid productTypeId)
+            query = query.Where(p => p.ProductTypeId == productTypeId);
+
+        if (request.PTypeId is Guid pTypeId)
+            query = query.Where(p => p.PTypeId == pTypeId);
+
+        if (!string.IsNullOrWhiteSpace(request.SourceCode))
+        {
+            var source = OrderLaneCodes.NormalizeSource(request.SourceCode) ?? request.SourceCode.Trim();
+            query = query.Where(p =>
+                p.SourceCode == source
+                || (source == "C.K.D."
+                    && (p.SourceCode == "C.K.D" || p.SourceCode == "C.K.D." || p.SourceCode == "CKD"))
+                || (source == "In house"
+                    && (p.SourceCode == "In house" || p.SourceCode == "Inhouse" || p.SourceCode == "IH")));
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SupplierCode))
+        {
+            var supplier = request.SupplierCode.Trim();
+            query = query.Where(p => p.SupplierCode == supplier);
+        }
+
         if (!string.IsNullOrWhiteSpace(request.Search))
         {
             var search = request.Search.Trim();
             query = query.Where(p =>
                 p.Product.Sku.Contains(search)
                 || p.Product.Name.Contains(search)
-                || p.Category.Name.Contains(search));
+                || p.Category.Name.Contains(search)
+                || p.SupplierCode.Contains(search));
         }
 
         var total = await query.CountAsync(ct);
@@ -244,7 +278,9 @@ public class GetMasterProductsQueryHandler : IRequestHandler<GetMasterProductsQu
                 Type = p.ProductType.Name,
                 Category = p.Category.Name,
                 PType = p.PType.Code,
+                DeliveryType = p.PType.DeliveryType,
                 p.SourceCode,
+                p.SupplierCode,
                 p.PackQuantity,
                 p.UnitValue,
                 p.UnitType,
@@ -261,14 +297,18 @@ public class GetMasterProductsQueryHandler : IRequestHandler<GetMasterProductsQu
         {
             var pack = r.PackQuantity <= 0 ? 1 : r.PackQuantity;
             var sale = visibility.CanSeeSale ? r.Sale : null;
+            var deliveryLabel = string.IsNullOrWhiteSpace(r.DeliveryType)
+                ? r.PType
+                : $"{r.PType} — {r.DeliveryType}";
             return new MasterProductListDto(
                 r.ProductId,
                 r.Sku,
                 r.Name,
                 r.Type,
                 r.Category,
-                r.PType,
+                deliveryLabel,
                 r.SourceCode,
+                r.SupplierCode,
                 r.PackQuantity,
                 r.UnitValue,
                 r.UnitType,

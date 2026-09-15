@@ -68,7 +68,6 @@ export default function MyShopPage() {
         onSearchChange={setHeaderSearch}
         columns={[
           { key: 'image', header: 'Image' },
-          { key: 'code', header: 'Code' },
           { key: 'name', header: 'Banner' },
           { key: 'action', header: 'Action' }
         ]}
@@ -85,7 +84,6 @@ export default function MyShopPage() {
                 '—'
               )}
             </td>
-            <td className="px-4 py-3.5 text-suzuki-blue font-medium">{b.productCode}</td>
             <td className="px-4 py-3.5 text-suzuki-blue">{b.bannerName || '—'}</td>
             <td className="px-4 py-3.5 text-xs text-suzuki-mute">View only</td>
           </tr>

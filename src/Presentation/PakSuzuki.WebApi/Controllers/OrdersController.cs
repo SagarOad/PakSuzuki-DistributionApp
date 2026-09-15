@@ -125,7 +125,8 @@ public class OrdersController : BaseApiController
     {
         Guid? distributorScope = _currentUser.Role == Roles.Distributor ? _currentUser.DistributorId : null;
         Guid? retailerScope = _currentUser.Role == Roles.Retailer ? _currentUser.RetailerId : null;
-        return Ok(await Mediator.Send(new GetOrderByIdQuery(id, distributorScope, retailerScope)));
+        var includeMargins = _currentUser.Role is Roles.SuperAdmin or Roles.Admin or Roles.RegionalHead;
+        return Ok(await Mediator.Send(new GetOrderByIdQuery(id, distributorScope, retailerScope, includeMargins)));
     }
 
     /// <summary>
@@ -134,7 +135,7 @@ public class OrdersController : BaseApiController
     /// PartiallyApprovedByDistributor + amendedItems (partial from inventory),
     /// ForwardedToPakSuzuki (cannot fulfill → Pak Suzuki),
     /// SentBackForModification + amendedItems (send amendments to retailer),
-    /// RejectedByDistributor.
+    /// RejectedByDistributor (final reject — no retailer amendment).
     /// </summary>
     [HttpPost("distributor-action/{orderId:guid}")]
     [Authorize(Policy = "DistributorOnly")]
@@ -207,9 +208,9 @@ public class OrdersController : BaseApiController
             status = body.Status.ToString(),
             message = body.Status switch
             {
-                OrderStatus.PartiallyDelivered => "Delivery started (ready to ship / in process).",
-                OrderStatus.Delivered => "Order marked as delivered.",
-                OrderStatus.ApprovedByDistributor => "Order approved by distributor.",
+                OrderStatus.PartiallyDelivered => "Order moved to In Process.",
+                OrderStatus.Delivered => "Order marked as Delivered.",
+                OrderStatus.ApprovedByDistributor => "Order set to Pending.",
                 _ => $"Order status set to {body.Status}."
             }
         });

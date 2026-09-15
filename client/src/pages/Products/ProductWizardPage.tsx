@@ -71,6 +71,8 @@ export default function ProductWizardPage() {
   const profile = selectedCategory?.formProfile
   const pTypes = selectedCategory?.pTypes ?? []
   const selectedPType = pTypes.find((p) => p.id === pTypeId)
+  const selectedSource = (lookups.data?.sources ?? []).find((s) => s.code === form.sourceCode)
+  const sourcePending = !!selectedSource && selectedSource.isReady === false
   const visibility = lookups.data?.priceVisibility
 
   const defaults = useQuery({
@@ -341,10 +343,21 @@ export default function ProductWizardPage() {
               <select className="field" value={form.sourceCode} onChange={(e) => { set({ sourceCode: e.target.value }); setLockSupplier(false) }}>
                 <option value="">Select source</option>
                 {(lookups.data?.sources ?? []).map((s) => (
-                  <option key={s.code} value={s.code}>{s.name}</option>
+                  <option key={s.code} value={s.code}>
+                    {s.name}
+                    {s.isReady === false ? ' (awaiting data)' : ''}
+                  </option>
                 ))}
               </select>
             </Field>
+            {sourcePending && (
+              <div className="md:col-span-2">
+                <p className="text-sm text-suzuki-mute bg-suzuki-mist rounded-lg p-3">
+                  {selectedSource?.notReadyMessage
+                    || 'This source is not ready yet. Catalog data is still awaited.'}
+                </p>
+              </div>
+            )}
             <Field label="Supplier">
               <select className="field" value={form.supplierCode} onChange={(e) => { set({ supplierCode: e.target.value }); setLockSupplier(true) }}>
                 <option value="">Select supplier</option>
@@ -548,7 +561,7 @@ export default function ProductWizardPage() {
             </button>
             <button
               type="button"
-              disabled={save.isPending || !pTypeId || !form.partItemNo || !form.description || !form.sourceCode || !form.supplierCode}
+              disabled={save.isPending || sourcePending || !pTypeId || !form.partItemNo || !form.description || !form.sourceCode || !form.supplierCode}
               onClick={() => { setError(null); save.mutate() }}
               className="rounded-lg bg-suzuki-red text-white px-5 py-2 text-sm font-bold disabled:opacity-50"
             >

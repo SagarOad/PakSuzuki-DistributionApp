@@ -21,6 +21,12 @@ export default defineConfig({
         target: 'http://localhost:5080',
         changeOrigin: true,
         secure: false
+      },
+      // Uploads live on the API (App_Data), not in the Vite/wwwroot build output.
+      '/uploads': {
+        target: 'http://localhost:5080',
+        changeOrigin: true,
+        secure: false
       }
     }
   },

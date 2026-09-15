@@ -4,6 +4,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
+using PakSuzuki.Application.Features.Orders;
 using PakSuzuki.Domain.Entities;
 using PakSuzuki.Domain.Enums;
 
@@ -55,9 +56,18 @@ public class UpsertMasterProductCommandHandler : IRequestHandler<UpsertMasterPro
             .FirstOrDefaultAsync(p => p.Id == body.PTypeId && p.IsActive && p.CategoryId == category.Id, ct)
             ?? throw Fail(nameof(body.PTypeId), "PType is not valid for the selected category.");
 
-        var sourceOk = await _context.CatalogSources.AnyAsync(s => s.Code == body.SourceCode && s.IsActive, ct);
-        if (!sourceOk)
+        var sourceCode = OrderLaneCodes.NormalizeSource(body.SourceCode) ?? body.SourceCode.Trim();
+        var sourceRow = await _context.CatalogSources.AsNoTracking()
+            .Where(s => s.IsActive)
+            .ToListAsync(ct);
+        var matchedSource = sourceRow.FirstOrDefault(s => OrderLaneCodes.SameSource(s.Code, sourceCode));
+        if (matchedSource is null)
             throw Fail(nameof(body.SourceCode), "Source must be chosen from the lookup list.");
+        if (!matchedSource.IsReady)
+            throw Fail(nameof(body.SourceCode),
+                matchedSource.NotReadyMessage
+                ?? "This source is not ready yet. Product data is still awaited.");
+        sourceCode = matchedSource.Code;
 
         var supplierOk = await _context.CatalogSuppliers.AnyAsync(s => s.Code == body.SupplierCode && s.IsActive, ct);
         if (!supplierOk)
@@ -130,7 +140,7 @@ public class UpsertMasterProductCommandHandler : IRequestHandler<UpsertMasterPro
         profile.Viscosity = NormalizeDash(body.Viscosity);
         profile.ApiStandard = NormalizeDash(body.ApiStandard);
         profile.ModelCode = string.IsNullOrWhiteSpace(body.ModelCode) ? null : body.ModelCode.Trim();
-        profile.SourceCode = body.SourceCode.Trim();
+        profile.SourceCode = sourceCode;
         profile.SgoFlag = pType.SgoFlag;
         profile.SupplierCode = body.SupplierCode.Trim();
         profile.UnitValue = body.UnitValue;

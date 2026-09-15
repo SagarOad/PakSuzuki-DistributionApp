@@ -4,7 +4,7 @@ import { api } from '@/api/axiosClient'
 import { catalogFilterParams, useCart } from '@/context/CartContext'
 import { ProductCard } from './ProductCard'
 import { OrderLaneFilters } from './OrderLaneFilters'
-import type { CatalogBanner, CatalogProductCard } from './catalogTypes'
+import { packSummary, type CatalogBanner, type CatalogProductCard } from './catalogTypes'
 
 interface Paged<T> {
   items: T[]
@@ -86,7 +86,10 @@ export default function LubricantCategoryPage() {
       description: detail.description,
       categoryName: detail.categoryName,
       imageUrl: detail.primaryImageUrl,
-      packLabel: variant.typeName,
+      packLabel: packSummary(product) || variant.typeName,
+      packQuantity: product.packQuantity ?? null,
+      unitValue: product.unitValue ?? null,
+      unitType: product.unitType ?? null,
       unitPrice: variant.distributorPrice || variant.retailPrice || product.displayPrice,
       gstPercent: variant.gstPercent != null ? Number(variant.gstPercent) : undefined,
       fedPercent: variant.fedPercent != null ? Number(variant.fedPercent) : undefined
@@ -106,7 +109,7 @@ export default function LubricantCategoryPage() {
         ) : (
           <div className="absolute inset-0 flex flex-col justify-center px-8 bg-gradient-to-r from-[#0b1f4a] via-[#123a7a] to-[#1a56b0]">
             <h1 className="text-2xl sm:text-3xl font-black text-white">{meta.title}</h1>
-            <p className="mt-2 text-sm text-white/80">Upload a matching header banner in My Shop</p>
+            <p className="mt-2 text-sm text-white/80">Banner managed by Pak Suzuki under Banner &amp; Promotions</p>
           </div>
         )}
       </section>

@@ -15,7 +15,6 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
   const qc = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const [productCode, setProductCode] = useState('')
   const [bannerName, setBannerName] = useState('')
   const [categoryName, setCategoryName] = useState<string>(DEFAULT_BANNER_CATEGORIES[0])
   const [imageUrl, setImageUrl] = useState('')
@@ -45,7 +44,6 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
 
   useEffect(() => {
     if (!detailQuery.data) return
-    setProductCode(detailQuery.data.productCode)
     setBannerName(detailQuery.data.bannerName ?? '')
     setCategoryName(detailQuery.data.categoryName || categories[0])
     setImageUrl(detailQuery.data.imageUrl)
@@ -70,7 +68,7 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
 
       const body = {
         type: mode === 'header' ? 'Header' : 'Category',
-        productCode,
+        productCode: '',
         bannerName: mode === 'category' ? (bannerName || categoryName) : bannerName || null,
         categoryName,
         imageUrl: url || '',
@@ -134,15 +132,6 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="space-y-4">
-            <Field label="Product Code">
-              <input
-                value={productCode}
-                onChange={(e) => setProductCode(e.target.value)}
-                className="field"
-                placeholder="12345"
-              />
-            </Field>
-
             {mode === 'category' && (
               <Field label="Banner Name">
                 <input
@@ -187,7 +176,7 @@ export default function BannerFormPage({ mode }: { mode: Mode }) {
               </button>
               <button
                 type="button"
-                disabled={save.isPending || !productCode.trim() || !categoryName}
+                disabled={save.isPending || !categoryName}
                 onClick={() => { setError(null); save.mutate() }}
                 className="rounded-lg bg-suzuki-red text-white px-6 py-2.5 text-sm font-bold disabled:opacity-50"
               >

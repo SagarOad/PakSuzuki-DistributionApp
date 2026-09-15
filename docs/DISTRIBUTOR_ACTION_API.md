@@ -46,6 +46,8 @@ Important fields:
 | `thresholdMet` | `true` / `false` — whether pack threshold is reached |
 | `status` | Must be `PendingDistributorApproval` to action |
 | `items[].id` | Use as `orderItemId` when amending |
+| `totalLiters` | Total lubricant volume in **liters** for the whole order (`0` if none). Formula: packs × bottles per pack × liters per bottle (ml is converted). |
+| `items[].lineLiters` | Same volume for that line (`0` if not a lube size). |
 
 ---
 
@@ -55,14 +57,21 @@ Important fields:
 |-------------------|---------|-------------|
 | `ApprovedByDistributor` | Approve the order | Fulfill myself **or** Pass to Pak Suzuki (with fulfillment fields below) |
 | `ForwardedToPakSuzuki` | Same as pass to Pak Suzuki | Also OK; still send `fulfillmentChoice` + `pakSuzukiShipTo` |
-| `SentBackForModification` | Send back to retailer | Ask retailer to change qty / lines |
-| `RejectedByDistributor` | Reject / send back | Treated like send-back for modification |
+| `SentBackForModification` | Send back to retailer | Ask retailer to change qty / lines (they can amend + resubmit) |
+| `RejectedByDistributor` | **Final reject** | Order ends as rejected; retailer **cannot** amend. Optional `remarks` note. |
 
 ### Not allowed
 
 | Do NOT send | Why |
 |-------------|-----|
 | `PartiallyApprovedByDistributor` | Partial approve is **blocked**. Full approve or send back only. |
+
+**Reject vs send-back:**
+
+| Send | Saved `statusCode` | Retailer can amend? |
+|------|--------------------|---------------------|
+| `SentBackForModification` | `SentBackForModification` | Yes |
+| `RejectedByDistributor` | `RejectedByDistributor` | No |
 
 ---
 
@@ -237,9 +246,9 @@ POST /api/orders/retailer-cancel/{orderId}
 
 | Who | Action | API |
 |-----|--------|-----|
-| Distributor | Approve / send back / pass to Pak Suzuki | `POST /api/orders/distributor-action/{orderId}` |
+| Distributor | Approve / send back / reject / pass to Pak Suzuki | `POST /api/orders/distributor-action/{orderId}` |
 | Distributor | See threshold + line ids | `GET /api/orders/{orderId}` |
-| Retailer | Resubmit after send-back | `POST /api/orders/retailer-resubmit/{orderId}` |
+| Retailer | Resubmit after send-back only | `POST /api/orders/retailer-resubmit/{orderId}` |
 | Retailer | Cancel pending / sent-back | `POST /api/orders/retailer-cancel/{orderId}` |
 | Both | List / detail | `GET /api/orders` · `GET /api/orders/{id}` |
 
@@ -255,9 +264,10 @@ Distributor: GET /api/orders/{id}  (check thresholdMet)
              POST /api/orders/distributor-action/{id}
                ├─ DistributorSelf          → ApprovedByDistributor
                ├─ PassToPakSuzuki + ShipTo → PendingPakSuzukiApproval
-               └─ SentBackForModification  → SentBackForModification
+               ├─ SentBackForModification  → SentBackForModification (retailer can amend)
+               └─ RejectedByDistributor    → RejectedByDistributor (final; no amend)
 
-Retailer (if sent back):
+Retailer (if sent back only):
              POST /api/orders/retailer-resubmit/{id}
                → PendingDistributorApproval again
 ```

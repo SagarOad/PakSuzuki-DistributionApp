@@ -12,7 +12,8 @@ namespace PakSuzuki.Application.Features.Orders.Commands;
 // - ApprovedByDistributor + DistributorSelf: fulfill full pack qty from inventory
 // - ApprovedByDistributor / ForwardedToPakSuzuki + PassToPakSuzuki: only when threshold met;
 //   then ship-to distributor or retailer is required
-// - SentBackForModification / RejectedByDistributor: send back so the retailer can modify
+// - SentBackForModification: send back so the retailer can amend and resubmit
+// - RejectedByDistributor: final reject (no retailer amendment)
 // Partial approval / partial delivery is not allowed (retailer ↔ distributor).
 public record ApproveOrderItemDto(Guid OrderItemId, decimal ApprovedQuantity);
 
@@ -151,7 +152,6 @@ public class ApproveOrderCommandHandler : IRequestHandler<ApproveOrderCommand>
                 break;
 
             case OrderStatus.SentBackForModification:
-            case OrderStatus.RejectedByDistributor:
                 if (request.AmendedItems != null)
                 {
                     ApplySendBackAmendments(order, request.AmendedItems);
@@ -160,6 +160,16 @@ public class ApproveOrderCommandHandler : IRequestHandler<ApproveOrderCommand>
                         _context, order.DistributorId, order.Items.ToList(), ct);
                 }
                 order.Status = OrderStatus.SentBackForModification;
+                order.FulfillmentChoice = null;
+                order.PakSuzukiShipTo = null;
+                order.RetailerCode = null;
+                order.ShipToCode = null;
+                order.BillToCode = null;
+                break;
+
+            case OrderStatus.RejectedByDistributor:
+                // Final reject — retailer cannot amend/resubmit this order.
+                order.Status = OrderStatus.RejectedByDistributor;
                 order.FulfillmentChoice = null;
                 order.PakSuzukiShipTo = null;
                 order.RetailerCode = null;
@@ -188,6 +198,7 @@ public class ApproveOrderCommandHandler : IRequestHandler<ApproveOrderCommand>
             {
                 OrderStatus.ApprovedByDistributor => "Order approved",
                 OrderStatus.SentBackForModification => "Order needs your update",
+                OrderStatus.RejectedByDistributor => "Order rejected",
                 OrderStatus.PendingPakSuzukiApproval => "Order forwarded to manufacturer",
                 _ => "Order status updated"
             };

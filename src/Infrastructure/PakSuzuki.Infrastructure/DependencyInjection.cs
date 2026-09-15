@@ -15,8 +15,8 @@ namespace PakSuzuki.Infrastructure;
 
 public static class DependencyInjection
 {
-    // Called once from PakSuzuki.WebApi Program.cs as services.AddInfrastructure(config, env.WebRootPath).
-    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration, string webRootPath)
+    // Called once from PakSuzuki.WebApi Program.cs with App_Data/uploads (not wwwroot).
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration, string mediaRootPath)
     {
         services.AddDbContext<ApplicationDbContext>(options =>
             options.UseSqlServer(configuration.GetConnectionString("DefaultConnection"),
@@ -40,7 +40,8 @@ public static class DependencyInjection
         services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
         services.AddScoped<IIdentityService, IdentityService>();
         services.AddScoped<ISapIntegrationService, SapIntegrationService>();
-        services.AddScoped<IFileStorageService>(_ => new LocalFileStorageService(webRootPath));
+        services.AddScoped<IFileStorageService>(_ => new LocalFileStorageService(mediaRootPath));
+        services.AddScoped<ILubricantProductBulkExcelService, LubricantProductBulkExcelService>();
         services.AddScoped<IIncentiveReportPdfService, IncentiveReportPdfService>();
         services.AddSingleton<IOtpService, OtpService>();
 

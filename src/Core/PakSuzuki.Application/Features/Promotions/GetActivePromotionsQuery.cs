@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using PakSuzuki.Application.Common.Images;
 using PakSuzuki.Application.Common.Interfaces;
 
 namespace PakSuzuki.Application.Features.Promotions;
@@ -37,15 +38,35 @@ public class GetActivePromotionsForMeQueryHandler
         if (string.IsNullOrEmpty(role)) return new List<ActivePromotionItemDto>();
 
         var now = _dateTime.UtcNow;
-        return await _context.Promotions.AsNoTracking()
+        // Load date-active rows, then match roles in memory so "Distributor,Retailer"
+        // (with optional spaces) always includes every intended popup — not only one.
+        var rows = await _context.Promotions.AsNoTracking()
             .Where(p => p.IsActive
+                && !string.IsNullOrEmpty(p.ImageUrl)
                 && p.StartDateUtc <= now
-                && p.EndDateUtc >= now
-                && p.TargetRoles.Contains(role))
-            .OrderByDescending(p => p.Type == "NewsletterPopUp")
-            .ThenByDescending(p => p.StartDateUtc)
-            .Select(p => new ActivePromotionItemDto(
-                p.Id, p.Title, p.Type, p.ImageUrl, p.RedirectUrl, p.StartDateUtc, p.EndDateUtc))
+                && p.EndDateUtc >= now)
+            .OrderByDescending(p => p.StartDateUtc)
+            .ThenByDescending(p => p.CreatedAtUtc)
             .ToListAsync(ct);
+
+        return rows
+            .Where(p => TargetsRole(p.TargetRoles, role))
+            .Select(p => new ActivePromotionItemDto(
+                p.Id,
+                p.Title,
+                BannerImageAspect.NormalizePromotionType(p.Type),
+                p.ImageUrl,
+                p.RedirectUrl,
+                p.StartDateUtc,
+                p.EndDateUtc))
+            .ToList();
+    }
+
+    private static bool TargetsRole(string? targetRoles, string role)
+    {
+        if (string.IsNullOrWhiteSpace(targetRoles)) return false;
+        return targetRoles
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(r => r.Equals(role, StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -9,6 +9,10 @@ public static class BannerImageAspect
 {
     public const string Header = "Header";
     public const string Category = "Category";
+    /// <summary>Single login popup type (replaces NewsletterPopUp / PromotionBanner).</summary>
+    public const string LoginPopup = "LoginPopup";
+
+    // Legacy aliases still accepted for older uploads / clients.
     public const string NewsletterPopUp = "NewsletterPopUp";
     public const string PromotionBanner = "PromotionBanner";
 
@@ -17,11 +21,30 @@ public static class BannerImageAspect
     {
         [Header] = (16.0 / 5.0, "16:5 (wide header)"),
         [Category] = (16.0 / 10.0, "16:10 (category card)"),
-        [NewsletterPopUp] = (335.0 / 156.0, "335×156 (newsletter)"),
-        [PromotionBanner] = (1.0, "1:1 (square promotion)")
+        // One professional popup card size for all login promotions.
+        [LoginPopup] = (4.0 / 3.0, "4:3 (login popup)"),
+        [NewsletterPopUp] = (4.0 / 3.0, "4:3 (login popup)"),
+        [PromotionBanner] = (4.0 / 3.0, "4:3 (login popup)")
     };
 
     private const double Tolerance = 0.08; // ±8%
+
+    public static string NormalizePromotionType(string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return LoginPopup;
+        if (type.Equals(NewsletterPopUp, StringComparison.OrdinalIgnoreCase)
+            || type.Equals(PromotionBanner, StringComparison.OrdinalIgnoreCase)
+            || type.Equals(LoginPopup, StringComparison.OrdinalIgnoreCase)
+            || type.Equals("PromoPopup", StringComparison.OrdinalIgnoreCase))
+            return LoginPopup;
+        return type.Trim();
+    }
+
+    public static bool IsLoginPopupType(string? type)
+    {
+        var n = NormalizePromotionType(type);
+        return n.Equals(LoginPopup, StringComparison.OrdinalIgnoreCase);
+    }
 
     public static string? KindFromFolder(string? folder)
     {
@@ -29,12 +52,14 @@ public static class BannerImageAspect
         var f = folder.Trim().ToLowerInvariant();
         if (f is "header-banners" or "header") return Header;
         if (f is "category-banners" or "category") return Category;
+        if (f is "promotions" or "login-popup" or "promo") return LoginPopup;
         return null;
     }
 
     public static void EnsureValid(Stream stream, string kind)
     {
-        if (!Specs.TryGetValue(kind, out var spec))
+        var normalized = NormalizePromotionType(kind);
+        if (!Specs.TryGetValue(normalized, out var spec) && !Specs.TryGetValue(kind, out spec))
             throw new ConflictException($"Unknown banner kind '{kind}'.");
 
         if (!stream.CanSeek)

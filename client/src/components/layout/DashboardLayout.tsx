@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink, Outlet, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
-  LayoutDashboard, Map, Truck, Package, Store, ShoppingBasket,
+  LayoutDashboard, Map, Truck, Package, ShoppingBasket,
   UsersRound, LogOut, CircleEllipsis, Image, FileBarChart2, Settings, Gift,
   Home, Droplets, ClipboardList, ShoppingCart, FilePlus2
 } from 'lucide-react'
@@ -19,14 +19,13 @@ const staffNavItems = [
   { to: '/distributors', label: 'Distributors', icon: Truck, roles: ['SuperAdmin', 'Admin'] },
   { to: '/retailers', label: 'Retailers', icon: Package, roles: ['SuperAdmin', 'Admin'] },
   { to: '/products', label: 'Products', icon: Droplets, roles: ['SuperAdmin', 'Admin'] },
-  { to: '/orders', label: 'Orders', icon: ShoppingBasket, roles: ['SuperAdmin', 'Admin'] },
+  { to: '/orders', label: 'Orders', icon: ShoppingBasket, roles: ['SuperAdmin', 'Admin', 'RegionalHead'] },
   { to: '/claims', label: 'Claims', icon: UsersRound, roles: ['SuperAdmin', 'Admin'] }
 ]
 
 const distributorNavItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/order/start', label: 'Start Order', icon: FilePlus2 },
-  { to: '/shop', label: 'My Shop', icon: Store },
   { to: '/orders', label: 'My Orders', icon: ClipboardList },
   { to: '/cart', label: 'Cart', icon: ShoppingCart }
 ]

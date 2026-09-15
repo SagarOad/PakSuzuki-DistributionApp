@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using PakSuzuki.Application.Common;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Common.Models;
@@ -27,19 +28,27 @@ public class GetRetailersQueryHandler : IRequestHandler<GetRetailersQuery, Pagin
 
     public async Task<PaginatedList<RetailerListDto>> Handle(GetRetailersQuery request, CancellationToken ct)
     {
-        var query = _context.Retailers
-            .Where(r => request.DistributorScope == null || r.DistributorId == request.DistributorScope)
-            .Where(r => request.Search == null
+        // Join distributors with IgnoreQueryFilters so soft-deleted (“ghost”) assignees still appear
+        // as "(removed)" instead of vanishing from the list.
+        var query =
+            from r in _context.Retailers.AsNoTracking()
+            join d in _context.Distributors.IgnoreQueryFilters().AsNoTracking()
+                on r.DistributorId equals d.Id
+            where request.DistributorScope == null || r.DistributorId == request.DistributorScope
+            where request.Search == null
                 || r.Name.Contains(request.Search)
                 || r.BusinessName.Contains(request.Search)
-                || r.RetailerCode.Contains(request.Search))
-            .OrderByDescending(r => r.CreatedAtUtc)
-            .Select(r => new RetailerListDto(
+                || r.RetailerCode.Contains(request.Search)
+            orderby r.CreatedAtUtc descending
+            select new RetailerListDto(
                 r.Id, r.RetailerCode, r.Name, r.BusinessName,
-                r.MobileNumber, r.Email, r.BusinessAddress, r.Distributor.Name,
-                r.Distributor.Region.Name,
+                r.MobileNumber, r.Email, r.BusinessAddress,
+                d.IsDeleted
+                    ? (string.IsNullOrWhiteSpace(d.BusinessName) ? d.Name : d.BusinessName) + " (removed)"
+                    : (string.IsNullOrWhiteSpace(d.BusinessName) ? d.Name : d.BusinessName),
+                d.Region != null ? d.Region.Name : "—",
                 r.DistributorApprovalStatus.ToString(), r.SuperAdminApprovalStatus.ToString(),
-                r.IsActive, r.IsBlocked, r.CreatedAtUtc, r.ProfileImageUrl));
+                r.IsActive, r.IsBlocked, r.CreatedAtUtc, r.ProfileImageUrl);
 
         return await PaginatedList<RetailerListDto>.CreateAsync(query, request.PageNumber, request.PageSize);
     }
@@ -117,7 +126,6 @@ public class GetRetailerByIdQueryHandler : IRequestHandler<GetRetailerByIdQuery,
     public async Task<RetailerDetailDto> Handle(GetRetailerByIdQuery request, CancellationToken ct)
     {
         var retailer = await _context.Retailers
-            .Include(r => r.Distributor).ThenInclude(d => d.Region)
             .Include(r => r.BusinessImages)
             .FirstOrDefaultAsync(r => r.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Retailer), request.Id);
@@ -125,12 +133,20 @@ public class GetRetailerByIdQueryHandler : IRequestHandler<GetRetailerByIdQuery,
         if (request.DistributorScope != null && retailer.DistributorId != request.DistributorScope)
             throw new ForbiddenAccessException("This retailer does not belong to your distributor account.");
 
-        var d = retailer.Distributor;
+        // Live retailers must keep a real distributor; soft-deleted links still render as ghosts for staff.
+        var d = await _context.Distributors
+            .IgnoreQueryFilters()
+            .Include(x => x.Region)
+            .FirstOrDefaultAsync(x => x.Id == retailer.DistributorId, ct)
+            ?? throw new ConflictException(
+                "This retailer has no linked distributor record. Contact support to repair the assignment.");
+
         return new RetailerDetailDto(
             retailer.Id, retailer.RetailerCode, retailer.Name, retailer.Cnic, retailer.MobileNumber,
             retailer.Email, retailer.BusinessName, retailer.Ntn, retailer.Iban, retailer.BusinessAddress,
-            retailer.Latitude, retailer.Longitude, retailer.DistributorId, d.Name,
-            d.Email, d.MobileNumber, d.BusinessAddress, d.Region.Name, d.Latitude, d.Longitude,
+            retailer.Latitude, retailer.Longitude, retailer.DistributorId,
+            PartyDisplay.DistributorLabel(d),
+            d.Email, d.MobileNumber, d.BusinessAddress, d.Region?.Name ?? "—", d.Latitude, d.Longitude,
             d.ProfileImageUrl,
             retailer.DistributorApprovalStatus.ToString(), retailer.SuperAdminApprovalStatus.ToString(),
             retailer.ApprovalRemarks, retailer.IsActive, retailer.IsBlocked, retailer.BlockedAtUtc,

@@ -13,6 +13,7 @@ import {
   DateFilterField
 } from '@/components/ui/DataTable'
 import { RequestActionButton, SendForCorrectionModal } from '@/components/ui/SendForCorrectionModal'
+import { DeleteDistributorModal } from '@/components/ui/DeleteDistributorModal'
 import PlaceholderImage from '@/components/ui/PlaceholderImage'
 import { downloadExcel, fetchAllFromApi, inDateRange, exportFailed } from '@/utils/excelExport'
 import clsx from 'clsx'
@@ -69,6 +70,7 @@ export default function DistributorsPage() {
   const [correctionId, setCorrectionId] = useState<string | null>(null)
   const [correctionRemarks, setCorrectionRemarks] = useState('')
   const [exporting, setExporting] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null)
 
   const setTab = (next: Tab) => {
     setPage(1)
@@ -125,15 +127,13 @@ export default function DistributorsPage() {
     }
   })
 
-  const removeDistributor = useMutation({
-    mutationFn: async (id: string) => {
-      await api.delete(`/distributors/${id}`)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['distributors-list'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-superadmin'] })
-    }
-  })
+  const onDistributorDeleted = () => {
+    queryClient.invalidateQueries({ queryKey: ['distributors-list'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard-superadmin'] })
+    queryClient.invalidateQueries({ queryKey: ['retailers'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard-map-markers'] })
+    setDeleteTarget(null)
+  }
 
   const reactivateDistributor = useMutation({
     mutationFn: async (id: string) => {
@@ -395,11 +395,12 @@ export default function DistributorsPage() {
                       <RequestActionButton
                         tone="reject"
                         title="Remove"
-                        onClick={() => {
-                          if (window.confirm(`Delete ${d.name}? They will be removed from the list and cannot log in.`)) {
-                            removeDistributor.mutate(d.id)
-                          }
-                        }}
+                        onClick={() =>
+                          setDeleteTarget({
+                            id: d.id,
+                            label: `${d.businessName || d.name} (${d.distributorCode})`
+                          })
+                        }
                       >
                         <Trash2 size={15} />
                       </RequestActionButton>
@@ -430,6 +431,15 @@ export default function DistributorsPage() {
               remarks: correctionRemarks.trim()
             })
           }
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteDistributorModal
+          distributorId={deleteTarget.id}
+          distributorLabel={deleteTarget.label}
+          onBack={() => setDeleteTarget(null)}
+          onDeleted={onDistributorDeleted}
         />
       )}
     </div>

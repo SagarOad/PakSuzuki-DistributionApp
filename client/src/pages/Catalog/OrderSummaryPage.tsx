@@ -3,10 +3,11 @@ import { useQuery } from '@tanstack/react-query'
 import { User, Mail, Phone, MapPin, Building2, Store } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuthStore } from '@/context/authStore'
-import { useCart } from '@/context/CartContext'
+import { useCart, useHydrateCartPackMeta } from '@/context/CartContext'
 import { useOrderTaxEstimate } from '@/hooks/useOrderTaxEstimate'
 import { ProductTitle } from './catalogTypes'
 import type { ReactNode } from 'react'
+import { cartLineLiters, cartTotalLiters } from '@/pages/Orders/orderTypes'
 
 function formatRs(n: number) {
   return `Rs. ${Number(n || 0).toLocaleString('en-PK')}`
@@ -26,8 +27,10 @@ interface DistributorProfile {
 export default function OrderSummaryPage() {
   const navigate = useNavigate()
   const { items, orderContext } = useCart()
+  useHydrateCartPackMeta()
   const { subTotal, gstPercent, gstAmount, fedAmount, whtPercent, whtAmount, estimatedTotal } =
     useOrderTaxEstimate(items)
+  const totalLiters = cartTotalLiters(items)
   const profileId = useAuthStore((s) => s.profileId)
 
   const profileQuery = useQuery({
@@ -117,6 +120,11 @@ export default function OrderSummaryPage() {
                   <p className="font-bold text-suzuki-navy">
                     Unit: <span className="text-suzuki-red">{item.quantity}</span>
                   </p>
+                  {cartLineLiters(item) != null && (
+                    <p className="font-bold text-suzuki-navy">
+                      Liters: <span className="text-suzuki-red">{cartLineLiters(item)} L</span>
+                    </p>
+                  )}
                   <p className="font-bold text-suzuki-navy sm:text-right">
                     Total Item Cost:{' '}
                     <span className="text-suzuki-red">{formatRs(item.unitPrice * item.quantity)}</span>
@@ -126,6 +134,12 @@ export default function OrderSummaryPage() {
             ))}
           </div>
           <div className="px-5 sm:px-6 py-4 border-t border-suzuki-line bg-suzuki-mist/40 space-y-1">
+            {totalLiters != null && (
+              <p className="text-sm font-bold text-suzuki-navy flex justify-between gap-6">
+                <span>Total liters</span>
+                <span className="text-suzuki-red">{totalLiters.toLocaleString('en-PK')} L</span>
+              </p>
+            )}
             <p className="text-sm font-bold text-suzuki-navy flex justify-between gap-6">
               <span>Subtotal</span>
               <span className="text-suzuki-red">{formatRs(subTotal)}</span>

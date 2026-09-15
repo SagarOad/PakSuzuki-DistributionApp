@@ -67,7 +67,7 @@ public class UpsertShopBannerCommandValidator : AbstractValidator<UpsertShopBann
 {
     public UpsertShopBannerCommandValidator()
     {
-        RuleFor(x => x.ProductCode).NotEmpty().MaximumLength(50);
+        RuleFor(x => x.ProductCode).MaximumLength(50);
         RuleFor(x => x.CategoryName).NotEmpty().MaximumLength(100);
         RuleFor(x => x.ImageUrl).NotEmpty().WithMessage("Banner image is required.");
         RuleFor(x => x.BannerName).MaximumLength(200)
@@ -95,7 +95,9 @@ public class UpsertShopBannerCommandHandler : IRequestHandler<UpsertShopBannerCo
         }
 
         banner.Type = request.Type;
-        banner.ProductCode = request.ProductCode.Trim();
+        banner.ProductCode = string.IsNullOrWhiteSpace(request.ProductCode)
+            ? "-"
+            : request.ProductCode.Trim();
         banner.BannerName = request.Type == ShopBannerType.Category
             ? (request.BannerName?.Trim() ?? request.CategoryName.Trim())
             : request.BannerName?.Trim();

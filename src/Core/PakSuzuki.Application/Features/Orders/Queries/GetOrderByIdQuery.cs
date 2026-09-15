@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using PakSuzuki.Application.Common;
 using PakSuzuki.Application.Common.Exceptions;
 using PakSuzuki.Application.Common.Interfaces;
 using PakSuzuki.Application.Features.Orders;
@@ -11,7 +12,20 @@ public record OrderLineItemDto(
     string? PrimaryImageUrl, string? CategoryName,
     Guid? ProductVariantId, string? VariantTypeName,
     decimal RequestedQuantity, string RequestedUnit, decimal? ApprovedQuantity,
-    decimal UnitPrice, decimal LineSubTotal, decimal LineGst, decimal LineFed);
+    decimal UnitPrice, decimal LineSubTotal, decimal LineGst, decimal LineFed,
+    /// <summary>Staff-only: current cost per pack for margin display.</summary>
+    decimal? CostPrice = null,
+    /// <summary>Staff-only: current purchase/distributor price per pack.</summary>
+    decimal? PurchasePrice = null,
+    /// <summary>Staff-only: current sale/retail price per pack.</summary>
+    decimal? SalePrice = null,
+    /// <summary>Bottles/units per pack (carton).</summary>
+    int? PackQuantity = null,
+    /// <summary>Size of one bottle/unit (e.g. liters).</summary>
+    decimal? UnitValue = null,
+    string? UnitType = null,
+    /// <summary>Line volume in liters for lubricant rows; 0 when not applicable.</summary>
+    decimal LineLiters = 0);
 
 public record OrderProofOfDeliveryDto(Guid Id, string StorageUrl, string FileName, string UploadedByRole, DateTime CreatedAtUtc);
 
@@ -33,11 +47,17 @@ public record OrderDetailDto(
     string? PoRef, string? DealerCode, int RetryCount,
     string? VendorCode, string? MaterialSourceCode, string? DeliveryTypeCode, string? DeliveryTypeName, string? SupplierCode,
     bool ThresholdMet, string? FulfillmentChoice, string? PakSuzukiShipTo,
-    string? SnapshotDistributorCode, string? SnapshotRetailerCode, string? ShipToCode, string? BillToCode);
+    string? SnapshotDistributorCode, string? SnapshotRetailerCode, string? ShipToCode, string? BillToCode,
+    /// <summary>Total lubricant volume in liters for the order (0 if none).</summary>
+    decimal TotalLiters = 0);
 
 // Scoping mirrors GetOrdersQuery: controller populates DistributorScope/RetailerScope
 // from ICurrentUserService so a caller can never fetch another party's order by guessing its Id.
-public record GetOrderByIdQuery(Guid Id, Guid? DistributorScope, Guid? RetailerScope) : IRequest<OrderDetailDto>;
+public record GetOrderByIdQuery(
+    Guid Id,
+    Guid? DistributorScope,
+    Guid? RetailerScope,
+    bool IncludeProductMargins = false) : IRequest<OrderDetailDto>;
 
 public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, OrderDetailDto>
 {
@@ -46,13 +66,37 @@ public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, Order
 
     public async Task<OrderDetailDto> Handle(GetOrderByIdQuery request, CancellationToken ct)
     {
-        var order = await _context.Orders
+        var orderQuery = _context.Orders
             .Include(o => o.Retailer)
             .Include(o => o.Distributor).ThenInclude(d => d.Region)
-            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .Include(o => o.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.CatalogProfile)
             .Include(o => o.ProofsOfDelivery)
-            .FirstOrDefaultAsync(o => o.Id == request.Id, ct)
+            .AsQueryable();
+
+        if (request.IncludeProductMargins)
+        {
+            orderQuery = orderQuery
+                .Include(o => o.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.PriceHistory)
+                .Include(o => o.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Variants);
+        }
+
+        var order = await orderQuery.FirstOrDefaultAsync(o => o.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Order), request.Id);
+
+        // Soft-deleted parties are filtered out of Includes — reload ghosts for historical display.
+        var distributor = order.Distributor
+            ?? await _context.Distributors
+                .IgnoreQueryFilters()
+                .Include(d => d.Region)
+                .FirstOrDefaultAsync(d => d.Id == order.DistributorId, ct);
+
+        Domain.Entities.Retailer? retailer = order.Retailer;
+        if (order.RetailerId is Guid retailerId && retailer is null)
+        {
+            retailer = await _context.Retailers
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(r => r.Id == retailerId, ct);
+        }
 
         if (request.DistributorScope != null && order.DistributorId != request.DistributorScope)
             throw new ForbiddenAccessException("This order does not belong to your distributor account.");
@@ -60,13 +104,51 @@ public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, Order
         if (request.RetailerScope != null && order.RetailerId != request.RetailerScope)
             throw new ForbiddenAccessException("This order does not belong to your retailer account.");
 
-        var items = order.Items.Select(i => new OrderLineItemDto(
-            i.Id, i.ProductId,
-            i.Product?.Name ?? "(removed product)", i.Product?.Sku ?? "", i.Product?.Bio,
-            i.Product?.PrimaryImageUrl, i.Product?.CategoryName,
-            i.ProductVariantId, i.VariantTypeName,
-            i.RequestedQuantity, i.RequestedUnit.ToString(), i.ApprovedQuantity,
-            i.UnitPrice, i.LineSubTotal, i.LineGst, i.LineFed)).ToList();
+        var items = order.Items.Select(i =>
+        {
+            decimal? cost = null, purchase = null, sale = null;
+            if (request.IncludeProductMargins && i.Product != null)
+            {
+                if (i.ProductVariantId is Guid variantId)
+                {
+                    var variant = i.Product.Variants.FirstOrDefault(v => v.Id == variantId);
+                    if (variant != null)
+                    {
+                        cost = variant.CostPrice;
+                        purchase = variant.DistributorPrice;
+                        sale = variant.RetailPrice;
+                    }
+                }
+
+                if (cost is null && purchase is null && sale is null)
+                {
+                    var price = i.Product.PriceHistory.FirstOrDefault(pp => pp.IsCurrent);
+                    if (price != null)
+                    {
+                        cost = price.CostPrice;
+                        purchase = price.SellingPrice;
+                        sale = price.RetailPrice;
+                    }
+                }
+            }
+
+            return new OrderLineItemDto(
+                i.Id, i.ProductId,
+                i.Product?.Name ?? "(removed product)", i.Product?.Sku ?? "", i.Product?.Bio,
+                i.Product?.PrimaryImageUrl, i.Product?.CategoryName,
+                i.ProductVariantId, i.VariantTypeName,
+                i.RequestedQuantity, i.RequestedUnit.ToString(), i.ApprovedQuantity,
+                i.UnitPrice, i.LineSubTotal, i.LineGst, i.LineFed,
+                cost, purchase, sale,
+                i.Product?.CatalogProfile?.PackQuantity,
+                i.Product?.CatalogProfile?.UnitValue,
+                i.Product?.CatalogProfile?.UnitType,
+                OrderLiterTotals.LineLiters(
+                    i.ApprovedQuantity ?? i.RequestedQuantity,
+                    i.Product?.CatalogProfile?.PackQuantity,
+                    i.Product?.CatalogProfile?.UnitValue,
+                    i.Product?.CatalogProfile?.UnitType));
+        }).ToList();
 
         var proofs = order.ProofsOfDelivery
             .OrderByDescending(p => p.CreatedAtUtc)
@@ -111,12 +193,16 @@ public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, Order
 
         return new OrderDetailDto(
             order.Id, order.OrderNumber, order.Source.ToString(), status, statusLabel, statusCode,
-            order.RetailerId, order.Retailer?.Name, order.Retailer?.MobileNumber, order.Retailer?.BusinessAddress,
+            order.RetailerId,
+            retailer is null
+                ? (order.RetailerCode is null ? null : PartyDisplay.RetailerLabel(null, order.RetailerCode))
+                : PartyDisplay.RetailerLabel(retailer),
+            retailer?.MobileNumber, retailer?.BusinessAddress,
             order.DistributorId,
-            order.Distributor?.Name ?? "Unknown",
-            order.Distributor?.MobileNumber ?? "",
-            order.Distributor?.BusinessAddress ?? "",
-            order.Distributor?.Region?.Name,
+            PartyDisplay.DistributorLabel(distributor, order.DistributorCode),
+            distributor?.MobileNumber ?? "",
+            distributor?.BusinessAddress ?? "",
+            distributor?.Region?.Name,
             order.DistributorRemarks, order.PakSuzukiRemarks, order.RetailerRemarks,
             order.SubTotal, order.TotalGst, order.TotalFed, order.WhtAmount, order.GrandTotal,
             gstPercent, whtPercent,
@@ -140,6 +226,7 @@ public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, Order
             order.ThresholdMet,
             order.FulfillmentChoice?.ToString(),
             order.PakSuzukiShipTo?.ToString(),
-            order.DistributorCode, order.RetailerCode, order.ShipToCode, order.BillToCode);
+            order.DistributorCode, order.RetailerCode, order.ShipToCode, order.BillToCode,
+            OrderLiterTotals.ForItems(order.Items));
     }
 }

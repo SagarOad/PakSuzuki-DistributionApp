@@ -58,8 +58,10 @@ public class DistributorsController : BaseApiController
         [FromQuery] double latitude,
         [FromQuery] double longitude,
         [FromQuery] Guid? regionId = null,
-        [FromQuery] int take = 5) =>
-        Ok(await Mediator.Send(new GetNearestDistributorsQuery(latitude, longitude, regionId, take)));
+        [FromQuery] int take = 5,
+        [FromQuery] Guid? excludeDistributorId = null) =>
+        Ok(await Mediator.Send(new GetNearestDistributorsQuery(
+            latitude, longitude, regionId, take, excludeDistributorId)));
 
     [HttpGet]
     [Authorize(Policy = "AdminOrAbove")]
@@ -143,6 +145,29 @@ public class DistributorsController : BaseApiController
         return NoContent();
     }
 
+    /// <summary>
+    /// Preview retailers that must be reassigned before soft-deleting a distributor,
+    /// with nearest suggested replacements (same idea as retailer registration).
+    /// </summary>
+    [HttpGet("{id:guid}/delete-preview")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> GetDeletePreview(Guid id) =>
+        Ok(await Mediator.Send(new GetDistributorDeletePreviewQuery(id)));
+
+    /// <summary>
+    /// Reassign all retailers under this distributor, then soft-delete the distributor.
+    /// </summary>
+    [HttpPost("{id:guid}/reassign-and-delete")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> ReassignAndDelete(Guid id, [FromBody] ReassignAndDeleteRequest body)
+    {
+        var assignments = (body.Assignments ?? [])
+            .Select(a => new RetailerReassignmentDto(a.RetailerId, a.NewDistributorId))
+            .ToList();
+        await Mediator.Send(new ReassignRetailersAndDeleteDistributorCommand(id, assignments));
+        return NoContent();
+    }
+
     /// <summary>Add more shop photos to an existing distributor (multipart field name: files).</summary>
     [HttpPost("business-images/{id:guid}")]
     [Authorize]
@@ -204,3 +229,6 @@ public record UpdateDistributorRequest(
     string Name, string MobileNumber, string Email, string BusinessName,
     string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude,
     string? SapDealerCode = null, string? SapShipToCode = null);
+
+public record ReassignAndDeleteAssignmentRequest(Guid RetailerId, Guid NewDistributorId);
+public record ReassignAndDeleteRequest(List<ReassignAndDeleteAssignmentRequest>? Assignments);

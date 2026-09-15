@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/axiosClient'
+import { sameMaterialSource, sourceScopeAllows } from '@/lib/orderLaneSource'
 import type { CatalogLookups, MasterProductRow } from '@/pages/Products/productWizardTypes'
 import type { ProductGroupDetail, ProductGroupListRow } from './schemeTypes'
 
@@ -145,7 +146,7 @@ function GroupEditor({
     const all = lookups.data?.sources ?? []
     const scope = selectedPType?.sourceScope
     if (!scope?.length) return all
-    return all.filter((s) => scope.includes(s.code))
+    return all.filter((s) => sourceScopeAllows(scope, s.code))
   }, [lookups.data, selectedPType])
 
   const products = useQuery({
@@ -167,7 +168,7 @@ function GroupEditor({
       rows = rows.filter((p) => (p.pType || '').toLowerCase() === selectedPType.code.toLowerCase())
     }
     if (sourceCode) {
-      rows = rows.filter((p) => (p.source || '').toLowerCase() === sourceCode.toLowerCase())
+      rows = rows.filter((p) => sameMaterialSource(p.source, sourceCode))
     }
     return rows
   }, [products.data, selectedPType, sourceCode])
@@ -351,7 +352,10 @@ function GroupEditor({
                 >
                   <option value="">All sources</option>
                   {sourceOptions.map((s) => (
-                    <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
+                    <option key={s.code} value={s.code}>
+                      {s.code} — {s.name}
+                      {s.isReady === false ? ' (awaiting data)' : ''}
+                    </option>
                   ))}
                 </select>
               </label>

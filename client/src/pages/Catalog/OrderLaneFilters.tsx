@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/axiosClient'
 import { useCart, type OrderContext } from '@/context/CartContext'
+import { sourceScopeAllows } from '@/lib/orderLaneSource'
 import type { CatalogLookups } from '@/pages/Products/productWizardTypes'
 
 interface Props {
@@ -49,12 +50,14 @@ export function OrderLaneFilters({ compact, onApplied }: Props) {
       }))
     )
     const filtered = sourceCode
-      ? rows.filter((d) => !d.sourceScope?.length || d.sourceScope.includes(sourceCode))
+      ? rows.filter((d) => sourceScopeAllows(d.sourceScope, sourceCode))
       : rows
     return filtered.sort((a, b) => a.code.localeCompare(b.code))
   }, [lookups.data, sourceCode])
 
   const selectedDelivery = deliveryOptions.find((d) => d.code === deliveryTypeCode)
+  const selectedSource = (lookups.data?.sources ?? []).find((s) => s.code === sourceCode)
+  const sourcePending = !!selectedSource && selectedSource.isReady === false
 
   // If current delivery is invalid for the new source, clear it.
   useEffect(() => {
@@ -197,6 +200,7 @@ export function OrderLaneFilters({ compact, onApplied }: Props) {
             {(lookups.data?.sources ?? []).map((s) => (
               <option key={s.code} value={s.code}>
                 {s.name}
+                {s.isReady === false ? ' (awaiting data)' : ''}
               </option>
             ))}
           </select>
@@ -207,14 +211,20 @@ export function OrderLaneFilters({ compact, onApplied }: Props) {
           <select
             className={`${fieldClass} mt-1`}
             value={deliveryTypeCode}
-            disabled={!sourceCode}
+            disabled={!sourceCode || sourcePending}
             onChange={(e) => {
               const v = e.target.value
               setDeliveryTypeCode(v)
               setSupplierCode('')
             }}
           >
-            <option value="">{sourceCode ? 'Select delivery type' : 'Select source first'}</option>
+            <option value="">
+              {sourcePending
+                ? 'Source awaiting data'
+                : sourceCode
+                  ? 'Select delivery type'
+                  : 'Select source first'}
+            </option>
             {deliveryOptions.map((d) => (
               <option key={d.code} value={d.code}>
                 {d.code} — {d.name}
@@ -229,11 +239,11 @@ export function OrderLaneFilters({ compact, onApplied }: Props) {
           <select
             className={`${fieldClass} mt-1`}
             value={effectiveSupplier}
-            disabled={!deliveryTypeCode}
+            disabled={!deliveryTypeCode || sourcePending}
             onChange={(e) => {
               const v = e.target.value
               setSupplierCode(v)
-              if (sourceCode && deliveryTypeCode && v) applyLane(sourceCode, deliveryTypeCode, v)
+              if (sourceCode && deliveryTypeCode && v && !sourcePending) applyLane(sourceCode, deliveryTypeCode, v)
             }}
           >
             <option value="">{deliveryTypeCode ? 'Select supplier' : 'Select delivery type first'}</option>
@@ -247,7 +257,14 @@ export function OrderLaneFilters({ compact, onApplied }: Props) {
         </label>
       </div>
 
-      {previewFilters && (
+      {sourcePending && (
+        <p className="text-sm text-suzuki-mute bg-suzuki-mist rounded-lg px-3 py-2">
+          {selectedSource?.notReadyMessage
+            || 'This source is not ready yet. Catalog data is still awaited.'}
+        </p>
+      )}
+
+      {previewFilters && !sourcePending && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-suzuki-mist/70 px-3 py-2">
           <p className="text-xs text-suzuki-navy">
             {previewQuery.isLoading
@@ -268,7 +285,7 @@ export function OrderLaneFilters({ compact, onApplied }: Props) {
         </div>
       )}
 
-      {previewFilters && !previewQuery.isLoading && previewQuery.data?.totalCount === 0 && (
+      {previewFilters && !sourcePending && !previewQuery.isLoading && previewQuery.data?.totalCount === 0 && (
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           No published products for this combination. Change source, delivery type, or supplier above — no need to clear and restart.
         </p>

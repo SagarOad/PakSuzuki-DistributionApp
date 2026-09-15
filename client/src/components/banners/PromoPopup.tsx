@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
@@ -15,7 +15,8 @@ type ActivePromo = {
   endDateUtc: string
 }
 
-const STORAGE_KEY = 'psmc.dismissedPromos'
+/** Bump key so older “dismiss all” session data cannot hide new popups. */
+const STORAGE_KEY = 'psmc.dismissedLoginPopups.v2'
 
 function readDismissed(): string[] {
   try {
@@ -30,105 +31,114 @@ function writeDismissed(ids: string[]) {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(ids))
 }
 
-/** Shows active promotional banners as a login popup for Distributor / Retailer. */
+function normalizePromo(raw: Record<string, unknown>): ActivePromo | null {
+  const id = String(raw.id ?? raw.Id ?? '').trim()
+  const imageUrl = String(raw.imageUrl ?? raw.ImageUrl ?? '').trim()
+  if (!id || !imageUrl) return null
+  return {
+    id,
+    title: String(raw.title ?? raw.Title ?? 'Promotion'),
+    type: String(raw.type ?? raw.Type ?? 'LoginPopup'),
+    imageUrl,
+    redirectUrl: (raw.redirectUrl ?? raw.RedirectUrl ?? null) as string | null,
+    startDateUtc: String(raw.startDateUtc ?? raw.StartDateUtc ?? ''),
+    endDateUtc: String(raw.endDateUtc ?? raw.EndDateUtc ?? '')
+  }
+}
+
+function normalizeList(payload: unknown): ActivePromo[] {
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { items?: unknown })?.items)
+      ? (payload as { items: unknown[] }).items
+      : []
+  return list
+    .map((row) => normalizePromo(row as Record<string, unknown>))
+    .filter((p): p is ActivePromo => p != null)
+}
+
+/** One image at a time. Closing advances to the next undismissed popup. */
 export default function PromoPopup() {
   const { role, isAuthenticated } = useAuth()
-  const [open, setOpen] = useState(false)
-  const [index, setIndex] = useState(0)
+  const [queue, setQueue] = useState<ActivePromo[]>([])
+  const [hydrated, setHydrated] = useState(false)
 
   const enabled = isAuthenticated && (role === 'Distributor' || role === 'Retailer')
 
   const query = useQuery({
     queryKey: ['catalog-active-promotions', role],
     enabled,
-    queryFn: async () => (await api.get<ActivePromo[]>('/catalog/active-promotions')).data,
-    staleTime: 60_000
+    queryFn: async () => {
+      const { data } = await api.get<unknown>('/catalog/active-promotions')
+      return normalizeList(data)
+    },
+    staleTime: 0,
+    refetchOnMount: 'always'
   })
 
-  const promos = useMemo(() => {
+  // Build the queue whenever the API list changes (keep already-dismissed out).
+  useEffect(() => {
+    if (!query.data) return
     const dismissed = new Set(readDismissed())
-    return (query.data ?? []).filter((p) => !dismissed.has(p.id))
+    setQueue(query.data.filter((p) => !dismissed.has(p.id)))
+    setHydrated(true)
   }, [query.data])
 
+  const current = queue[0] ?? null
+  const open = hydrated && !!current
+
   useEffect(() => {
-    if (promos.length > 0) {
-      setIndex(0)
-      setOpen(true)
-    } else {
-      setOpen(false)
+    if (!open) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
     }
-  }, [promos])
+  }, [open])
 
-  if (!enabled || !open || promos.length === 0) return null
+  if (!enabled || !current) return null
 
-  const current = promos[Math.min(index, promos.length - 1)]
-
-  const dismissCurrent = () => {
-    const next = [...readDismissed(), current.id]
-    writeDismissed(next)
-    const remaining = promos.filter((p) => p.id !== current.id)
-    if (remaining.length === 0) {
-      setOpen(false)
-      return
-    }
-    setIndex(0)
+  const dismiss = () => {
+    const id = current.id
+    const nextDismissed = [...new Set([...readDismissed(), id])]
+    writeDismissed(nextDismissed)
+    // Advance immediately to the next popup in the local queue.
+    setQueue((prev) => prev.filter((p) => p.id !== id))
   }
 
-  const dismissAll = () => {
-    writeDismissed([...readDismissed(), ...promos.map((p) => p.id)])
-    setOpen(false)
-  }
+  const image = (
+    <img
+      key={current.id}
+      src={current.imageUrl}
+      alt={current.title || 'Promotion'}
+      className="block w-full max-h-[80vh] object-contain rounded-xl bg-white"
+    />
+  )
 
   return createPortal(
-    <div className="fixed inset-0 z-[120] bg-black/50 flex items-center justify-center p-4" role="dialog" aria-label="Promotion">
-      <div className="relative w-full max-w-md rounded-2xl bg-white shadow-card overflow-hidden">
+    <div
+      className="fixed inset-0 z-[10000] bg-black/60 flex items-center justify-center p-4"
+      role="dialog"
+      aria-label="Promotion"
+      aria-modal="true"
+    >
+      <div className="relative w-full max-w-lg" key={current.id}>
         <button
           type="button"
-          onClick={dismissAll}
-          className="absolute top-3 right-3 z-10 h-8 w-8 rounded-full bg-white/90 text-suzuki-navy inline-flex items-center justify-center shadow"
+          onClick={dismiss}
+          className="absolute -top-3 -right-3 z-10 h-8 w-8 rounded-full bg-white text-suzuki-navy shadow-md inline-flex items-center justify-center hover:bg-suzuki-ice"
           aria-label="Close"
         >
-          <X size={16} />
+          <X size={16} strokeWidth={2.5} />
         </button>
-
-        <div className="bg-suzuki-navy px-5 py-3 pr-12">
-          <p className="text-xs font-semibold text-white/70 uppercase tracking-wide">
-            {current.type === 'NewsletterPopUp' ? 'Newsletter' : 'Promotion'}
-          </p>
-          <h2 className="text-lg font-extrabold text-white">{current.title}</h2>
-        </div>
 
         {current.redirectUrl ? (
           <a href={current.redirectUrl} target="_blank" rel="noreferrer" className="block">
-            <img src={current.imageUrl} alt={current.title} className="w-full max-h-[360px] object-contain bg-suzuki-mist" />
+            {image}
           </a>
         ) : (
-          <img src={current.imageUrl} alt={current.title} className="w-full max-h-[360px] object-contain bg-suzuki-mist" />
+          image
         )}
-
-        <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-suzuki-line">
-          <p className="text-xs text-suzuki-mute">
-            {index + 1} of {promos.length}
-          </p>
-          <div className="flex gap-2">
-            {promos.length > 1 && index < promos.length - 1 && (
-              <button
-                type="button"
-                onClick={() => setIndex((i) => i + 1)}
-                className="rounded-xl bg-suzuki-ice px-4 py-2 text-sm font-bold text-suzuki-navy"
-              >
-                Next
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={dismissCurrent}
-              className="rounded-xl bg-suzuki-red px-4 py-2 text-sm font-bold text-white"
-            >
-              {index < promos.length - 1 ? 'Dismiss' : 'Got it'}
-            </button>
-          </div>
-        </div>
       </div>
     </div>,
     document.body

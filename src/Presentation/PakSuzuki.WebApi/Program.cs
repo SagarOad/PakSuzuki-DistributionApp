@@ -1,3 +1,4 @@
+using Microsoft.Extensions.FileProviders;
 using PakSuzuki.Application;
 using PakSuzuki.Infrastructure;
 using PakSuzuki.WebApi.Extensions;
@@ -11,6 +12,11 @@ var builder = WebApplication.CreateBuilder(args);
 Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "logs"));
 Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "email-outbox"));
 
+// User media lives outside wwwroot so `npm run build` (emptyOutDir) cannot wipe uploads.
+var mediaRoot = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "uploads");
+Directory.CreateDirectory(mediaRoot);
+MigrateLegacyWwwrootUploads(builder.Environment.WebRootPath, mediaRoot);
+
 // ---------- Serilog ----------
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
@@ -21,7 +27,7 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
 
 // ---------- Layers (Clean Architecture composition root) ----------
 builder.Services.AddApplication();
-builder.Services.AddInfrastructure(builder.Configuration, builder.Environment.WebRootPath);
+builder.Services.AddInfrastructure(builder.Configuration, mediaRoot);
 
 // ---------- API plumbing ----------
 builder.Services.AddControllers()
@@ -130,7 +136,12 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
-app.UseStaticFiles();
+app.UseStaticFiles(); // SPA assets in wwwroot (safe to empty on frontend build)
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(mediaRoot),
+    RequestPath = "/uploads"
+});
 
 app.UseCors(CorsServiceExtensions.PolicyName);
 
@@ -143,5 +154,36 @@ app.MapControllers();
 app.MapFallbackToFile("index.html");
 
 app.Run();
+
+/// <summary>
+/// One-time move of any leftover wwwroot/uploads into App_Data/uploads so existing
+/// DB URLs (/uploads/...) keep working after storage was moved off wwwroot.
+/// </summary>
+static void MigrateLegacyWwwrootUploads(string? webRootPath, string mediaRoot)
+{
+    if (string.IsNullOrWhiteSpace(webRootPath)) return;
+    var legacy = Path.Combine(webRootPath, "uploads");
+    if (!Directory.Exists(legacy)) return;
+
+    foreach (var sourceFile in Directory.EnumerateFiles(legacy, "*", SearchOption.AllDirectories))
+    {
+        var relative = Path.GetRelativePath(legacy, sourceFile);
+        var destFile = Path.Combine(mediaRoot, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+        if (!File.Exists(destFile))
+            File.Move(sourceFile, destFile);
+    }
+
+    try
+    {
+        // Clean empty leftover folders under wwwroot/uploads after move.
+        if (!Directory.EnumerateFileSystemEntries(legacy).Any())
+            Directory.Delete(legacy, recursive: true);
+    }
+    catch
+    {
+        // Non-fatal: leave empty legacy folder if locked.
+    }
+}
 
 public partial class Program { }

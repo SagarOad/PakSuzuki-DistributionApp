@@ -27,8 +27,9 @@ public static class OrderFulfillmentRules
         || order.FulfillmentChoice == OrderFulfillmentChoice.PassToPakSuzuki;
 
     /// <summary>
-    /// Partial deliveries are allowed only for Distributor → Pak Suzuki orders that include Parts (not Lubricants-only).
-    /// Retailer ↔ Distributor never allows partial delivery or partial approval.
+    /// True partial *quantity* delivery (some lines short) — Parts orders to Pak Suzuki only.
+    /// Status <c>PartiallyDelivered</c> itself is the shared "In Process / delivery started"
+    /// step for lubes and parts; do not use this flag to block that workflow step.
     /// </summary>
     public static bool AllowsPartialDelivery(Order order) =>
         PakSuzukiDelivers(order) && OrderContainsParts(order.Items);

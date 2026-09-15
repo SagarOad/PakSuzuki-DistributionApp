@@ -7,7 +7,7 @@ public class Promotion : AuditableEntity
 {
     public string Title { get; set; } = default!;
 
-    /// <summary>NewsletterPopUp | PromotionBanner</summary>
+    /// <summary>Canonical type is LoginPopup (legacy NewsletterPopUp / PromotionBanner normalized on save).</summary>
     public string Type { get; set; } = default!;
 
     public string ImageUrl { get; set; } = default!;

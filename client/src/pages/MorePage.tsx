@@ -16,7 +16,7 @@ export default function MorePage() {
     {
       to: '/promotions',
       title: 'Banner & Promotions',
-      note: 'Header & category banners for Start Order / dashboard, plus login pop-up promotions for distributors and retailers.',
+      note: 'Header & category banners for Start Order / dashboard, plus login popups for distributors and retailers.',
       icon: Image,
       roles: ['SuperAdmin', 'Admin']
     },

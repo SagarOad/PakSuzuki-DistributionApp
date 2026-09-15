@@ -15,6 +15,17 @@ export interface OrderLineItem {
   lineSubTotal: number
   lineGst: number
   lineFed: number
+  /** Staff-only margin inputs (per pack). */
+  costPrice?: number | null
+  purchasePrice?: number | null
+  salePrice?: number | null
+  /** Bottles/units per pack (carton). */
+  packQuantity?: number | null
+  /** Size of one bottle/unit (e.g. liters). */
+  unitValue?: number | null
+  unitType?: string | null
+  /** Server-computed line volume in liters. */
+  lineLiters?: number | null
 }
 
 export interface OrderProof {
@@ -85,6 +96,8 @@ export interface OrderDetail {
   snapshotRetailerCode?: string | null
   shipToCode?: string | null
   billToCode?: string | null
+  /** Total lubricant volume in liters for the order (0 if none). */
+  totalLiters?: number | null
 }
 
 /** UI-facing status groups that match the design pills. */
@@ -148,12 +161,161 @@ export function locationLine(region?: string | null, address?: string | null) {
   return parts.join(', ') || '—'
 }
 
+/** Who receives the goods — driven by Pak Suzuki ship-to on threshold orders. */
+export type ShipToDeliveryParty = {
+  partyKind: 'Retailer' | 'Distributor'
+  /** UI label for the party name field */
+  nameLabel: string
+  name: string
+  mobile: string
+  address: string
+  regionName?: string | null
+}
+
+/**
+ * Threshold + ship-to Distributor → distributor address/contact.
+ * Threshold + ship-to Retailer → retailer address/contact.
+ * Otherwise prefer retailer (normal retailer order), else distributor.
+ */
+export function resolveShipToDelivery(order: Pick<
+  OrderDetail,
+  | 'thresholdMet'
+  | 'thresholdReached'
+  | 'pakSuzukiShipTo'
+  | 'retailerName'
+  | 'retailerMobile'
+  | 'retailerAddress'
+  | 'distributorName'
+  | 'distributorMobile'
+  | 'distributorAddress'
+  | 'regionName'
+>): ShipToDeliveryParty {
+  const threshold = !!(order.thresholdMet ?? order.thresholdReached)
+  const shipTo = (order.pakSuzukiShipTo || '').trim()
+
+  const asDistributor = (): ShipToDeliveryParty => ({
+    partyKind: 'Distributor',
+    nameLabel: 'Distributor',
+    name: order.distributorName || '—',
+    mobile: order.distributorMobile || '—',
+    address: order.distributorAddress || '—',
+    regionName: order.regionName
+  })
+
+  const asRetailer = (): ShipToDeliveryParty => ({
+    partyKind: 'Retailer',
+    nameLabel: 'Retailer',
+    name: order.retailerName || '—',
+    mobile: order.retailerMobile || '—',
+    address: order.retailerAddress || '—',
+    regionName: order.regionName
+  })
+
+  if (threshold && shipTo === 'Distributor') return asDistributor()
+  if (threshold && shipTo === 'Retailer') return asRetailer()
+  if (order.retailerName || order.retailerAddress || order.retailerMobile) return asRetailer()
+  return asDistributor()
+}
+
 /** Qty to show after distributor action: approved when set, otherwise requested. */
 export function displayOrderQty(item: {
   requestedQuantity: number
   approvedQuantity?: number | null
 }) {
   return item.approvedQuantity != null ? item.approvedQuantity : item.requestedQuantity
+}
+
+/** Liters for one line (packs × bottles/pack × liters per bottle). ml is converted. */
+export function lineLiters(item: {
+  requestedQuantity: number
+  approvedQuantity?: number | null
+  packQuantity?: number | null
+  unitValue?: number | null
+  unitType?: string | null
+  lineLiters?: number | null
+}) {
+  if (typeof item.lineLiters === 'number' && item.lineLiters > 0) {
+    return item.lineLiters
+  }
+  const unit = (item.unitType || 'L').trim().toLowerCase()
+  const packs = displayOrderQty(item)
+  const bottles = item.packQuantity && item.packQuantity > 0 ? item.packQuantity : 1
+  const size = item.unitValue && item.unitValue > 0 ? item.unitValue : 0
+  if (size <= 0) return null
+
+  let litersPerBottle = 0
+  if (unit === 'ml' || unit === 'milliliter' || unit === 'millilitre') litersPerBottle = size / 1000
+  else if (
+    unit === '' ||
+    unit === 'l' ||
+    unit === 'ltr' ||
+    unit === 'lt' ||
+    unit === 'liter' ||
+    unit === 'liters' ||
+    unit === 'litre' ||
+    unit === 'litres'
+  ) {
+    litersPerBottle = size
+  } else {
+    return null
+  }
+  if (litersPerBottle <= 0) return null
+  return Math.round(packs * bottles * litersPerBottle * 100) / 100
+}
+
+export function orderTotalLiters(
+  items: {
+    requestedQuantity: number
+    approvedQuantity?: number | null
+    packQuantity?: number | null
+    unitValue?: number | null
+    unitType?: string | null
+    lineLiters?: number | null
+  }[],
+  apiTotal?: number | null
+) {
+  if (typeof apiTotal === 'number' && apiTotal > 0) return apiTotal
+  let total = 0
+  let any = false
+  for (const item of items) {
+    const L = lineLiters(item)
+    if (L == null) continue
+    any = true
+    total += L
+  }
+  return any ? Math.round(total * 100) / 100 : null
+}
+
+export function cartLineLiters(item: {
+  quantity: number
+  packQuantity?: number | null
+  unitValue?: number | null
+  unitType?: string | null
+}) {
+  return lineLiters({
+    requestedQuantity: item.quantity,
+    packQuantity: item.packQuantity,
+    unitValue: item.unitValue,
+    unitType: item.unitType
+  })
+}
+
+export function cartTotalLiters(
+  items: {
+    quantity: number
+    packQuantity?: number | null
+    unitValue?: number | null
+    unitType?: string | null
+  }[]
+) {
+  return orderTotalLiters(
+    items.map((item) => ({
+      requestedQuantity: item.quantity,
+      packQuantity: item.packQuantity,
+      unitValue: item.unitValue,
+      unitType: item.unitType
+    }))
+  )
 }
 
 /** Line amount aligned with display qty (handles older partial rows before line snapshots were updated). */
@@ -167,34 +329,35 @@ export function displayLineAmount(item: {
   return Math.round(item.unitPrice * item.approvedQuantity * 100) / 100
 }
 
-/** Design tracking steps under Order Summary for in-progress distributor / manufacture views. */
-export type TrackingStep = 'processed' | 'readyToShip' | 'delivered'
+/** Design tracking steps: Pending → In Process → Delivered (API codes unchanged). */
+export type TrackingStep = 'pending' | 'inProcess' | 'delivered'
 
 export function getOrderTracking(status: string, statusCode?: string | null): {
-  processed: boolean
-  readyToShip: boolean
+  pending: boolean
+  inProcess: boolean
   delivered: boolean
   current: TrackingStep
 } {
   const code = statusCode || status
   const delivered =
-    code === 'Delivered' || code === 'InvoiceConfirmed' || code === 'PartiallyDelivered'
-  const readyToShip =
-    delivered || code === 'SubmittedToSap' || code === 'PartiallyDelivered' || code === 'Delivered'
-  const processed =
+    code === 'Delivered' || code === 'InvoiceConfirmed'
+  const inProcess =
+    delivered || code === 'PartiallyDelivered'
+  const pending =
     delivered ||
-    readyToShip ||
+    inProcess ||
     ![
       ...CANCELED_STATUSES,
       'PendingDistributorApproval',
-      'SentBackForModification'
+      'SentBackForModification',
+      'RejectedByDistributor'
     ].includes(code)
 
   const current: TrackingStep = delivered
     ? 'delivered'
-    : readyToShip
-      ? 'readyToShip'
-      : 'processed'
+    : inProcess
+      ? 'inProcess'
+      : 'pending'
 
-  return { processed, readyToShip, delivered, current }
+  return { pending, inProcess, delivered, current }
 }

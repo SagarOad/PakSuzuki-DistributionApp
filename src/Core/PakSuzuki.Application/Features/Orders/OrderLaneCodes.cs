@@ -17,6 +17,9 @@ public static class OrderLaneCodes
         if (compact.Equals("Local", StringComparison.OrdinalIgnoreCase)
             || compact.Equals("LOC", StringComparison.OrdinalIgnoreCase))
             return "Local";
+        if (compact.Equals("Inhouse", StringComparison.OrdinalIgnoreCase)
+            || compact.Equals("IH", StringComparison.OrdinalIgnoreCase))
+            return "In house";
 
         return raw;
     }

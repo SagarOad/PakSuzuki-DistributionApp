@@ -13,8 +13,7 @@ import {
   type ShopBannerRow
 } from '@/pages/Shop/shopTypes'
 
-type PromoType = 'NewsletterPopUp' | 'PromotionBanner'
-type Tab = 'header' | 'category' | 'NewsletterPopUp' | 'PromotionBanner' | 'all'
+type Tab = 'header' | 'category' | 'popups'
 type ShopBannerMode = 'header' | 'category'
 
 interface PromoRow {
@@ -36,9 +35,6 @@ interface Paged<T> {
   totalPages: number
   totalCount: number
 }
-
-const typeLabel = (t: string) =>
-  t === 'NewsletterPopUp' ? 'Newsletter Pop-Up' : t === 'PromotionBanner' ? 'Promotion Banner' : t
 
 function toDateInput(iso?: string) {
   if (!iso) return ''
@@ -62,8 +58,6 @@ export default function PromotionsPage() {
   const [editingBanner, setEditingBanner] = useState<ShopBannerRow | null>(null)
 
   const isShopTab = tab === 'header' || tab === 'category'
-  const promoTypeFilter =
-    tab === 'all' ? undefined : tab === 'NewsletterPopUp' || tab === 'PromotionBanner' ? tab : undefined
 
   const headersQuery = useQuery({
     queryKey: ['shop-banners', 'Header', search],
@@ -84,11 +78,11 @@ export default function PromotionsPage() {
   })
 
   const listQuery = useQuery({
-    queryKey: ['promotions', promoTypeFilter, search, page],
-    enabled: !isShopTab,
+    queryKey: ['promotions', 'LoginPopup', search, page],
+    enabled: tab === 'popups',
     queryFn: async () =>
       (await api.get<Paged<PromoRow>>('/promotions', {
-        params: { type: promoTypeFilter, search: search || undefined, pageNumber: page, pageSize: 10 }
+        params: { type: 'LoginPopup', search: search || undefined, pageNumber: page, pageSize: 10 }
       })).data
   })
 
@@ -123,7 +117,7 @@ export default function PromotionsPage() {
     ? 'Add Header Banner'
     : tab === 'category'
       ? 'Add Category Banner'
-      : 'Add New'
+      : 'Add login popup'
 
   return (
     <div className="space-y-5">
@@ -133,7 +127,7 @@ export default function PromotionsPage() {
           <p className="text-sm text-suzuki-mute mt-1 max-w-2xl">
             Header banners show on Start Order and Distributor dashboard.
             Category banners show as category tiles on Start Order.
-            Promotion / newsletter items pop up when Distributor or Retailer signs in (within start–end dates).
+            Login popups appear after Distributor or Retailer sign-in (within start–end dates).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -141,9 +135,7 @@ export default function PromotionsPage() {
             [
               ['header', 'Header banners'],
               ['category', 'Category banners'],
-              ['NewsletterPopUp', 'Newsletter pop-up'],
-              ['PromotionBanner', 'Promotion banners'],
-              ['all', 'All promotions']
+              ['popups', 'Login popups']
             ] as const
           ).map(([key, label]) => (
             <ListTabPill
@@ -171,7 +163,6 @@ export default function PromotionsPage() {
           onSearchChange={setSearch}
           columns={[
             { key: 'image', header: 'Image' },
-            { key: 'code', header: 'Code' },
             { key: 'name', header: 'Banner' },
             { key: 'category', header: 'Category' },
             { key: 'status', header: 'Status' },
@@ -189,7 +180,6 @@ export default function PromotionsPage() {
                   '—'
                 )}
               </td>
-              <td className="px-3 py-3.5 font-semibold text-suzuki-blue">{b.productCode}</td>
               <td className="px-3 py-3.5 text-[#0B2E59] font-semibold">{b.bannerName || '—'}</td>
               <td className="px-3 py-3.5 text-[#64748B]">{categoryLabel(null, b.categoryName)}</td>
               <td className="px-3 py-3.5">
@@ -229,20 +219,19 @@ export default function PromotionsPage() {
         </DataTable>
       ) : (
         <OrderTable
-          title="Promotions List"
+          title="Login popups"
           search={search}
           onSearchChange={(v) => { setSearch(v); setPage(1) }}
           columns={[
             { key: 'title', header: 'Title', wide: true },
             { key: 'media', header: 'Image/Redirect URL' },
             { key: 'dates', header: 'Active period' },
-            { key: 'type', header: 'Type' },
             { key: 'audience', header: 'Publish to' },
             { key: 'status', header: 'Status' },
             { key: 'action', header: 'Action', align: 'right' }
           ]}
           loading={listQuery.isLoading}
-          empty="No promotions yet."
+          empty="No login popups yet."
           pagination={{
             page,
             totalPages: listQuery.data?.totalPages ?? 1,
@@ -270,7 +259,6 @@ export default function PromotionsPage() {
                 {' – '}
                 {new Date(p.endDateUtc).toLocaleDateString('en-GB')}
               </td>
-              <td className="px-3 py-3.5 text-[#64748B]">{typeLabel(p.type)}</td>
               <td className="px-3 py-3.5 text-[#64748B] text-sm">{p.targetRoles || '—'}</td>
               <td className="px-3 py-3.5">
                 <span className={clsx(
@@ -319,7 +307,6 @@ export default function PromotionsPage() {
       {promoModalOpen && (
         <AddPromotionModal
           initial={editingPromo}
-          defaultType={tab === 'PromotionBanner' ? 'PromotionBanner' : 'NewsletterPopUp'}
           onClose={() => setPromoModalOpen(false)}
           onSaved={() => {
             setPromoModalOpen(false)
@@ -344,7 +331,6 @@ function AddShopBannerModal({
   onSaved: () => void
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
-  const [productCode, setProductCode] = useState(initial?.productCode ?? '')
   const [bannerName, setBannerName] = useState(initial?.bannerName ?? '')
   const [categoryName, setCategoryName] = useState(initial?.categoryName || DEFAULT_BANNER_CATEGORIES[0])
   const [isActive, setIsActive] = useState(initial?.isActive ?? true)
@@ -372,7 +358,6 @@ function AddShopBannerModal({
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      if (!productCode.trim()) throw new Error('Product code is required.')
       if (!categoryName) throw new Error('Category is required.')
       if (!initial && !file) throw new Error('Banner image is required.')
 
@@ -388,7 +373,7 @@ function AddShopBannerModal({
 
       const body = {
         type: mode === 'header' ? 'Header' : 'Category',
-        productCode: productCode.trim(),
+        productCode: '',
         bannerName: bannerName.trim() || (mode === 'category' ? categoryName : null),
         categoryName,
         imageUrl,
@@ -426,20 +411,14 @@ function AddShopBannerModal({
 
       {error && <ErrorBox message={error} />}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="block space-y-1.5">
-          <span className="text-sm font-bold text-suzuki-navy">Product Code</span>
-          <input value={productCode} onChange={(e) => setProductCode(e.target.value)} className="field" placeholder="12345" />
-        </label>
-        <label className="block space-y-1.5">
-          <span className="text-sm font-bold text-suzuki-navy">Category*</span>
-          <select value={categoryName} onChange={(e) => setCategoryName(e.target.value)} className="field">
-            {categories.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </label>
-      </div>
+      <label className="block space-y-1.5">
+        <span className="text-sm font-bold text-suzuki-navy">Category*</span>
+        <select value={categoryName} onChange={(e) => setCategoryName(e.target.value)} className="field">
+          {categories.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+      </label>
 
       <label className="block mt-4 space-y-1.5">
         <span className="text-sm font-bold text-suzuki-navy">
@@ -503,17 +482,14 @@ function AddShopBannerModal({
 
 function AddPromotionModal({
   initial,
-  defaultType,
   onClose,
   onSaved
 }: {
   initial: PromoRow | null
-  defaultType: PromoType
   onClose: () => void
   onSaved: () => void
 }) {
   const [title, setTitle] = useState(initial?.title ?? '')
-  const [type, setType] = useState<PromoType>((initial?.type as PromoType) || defaultType)
   const [redirectUrl, setRedirectUrl] = useState(initial?.redirectUrl ?? '')
   const [publishDistributor, setPublishDistributor] = useState(initial?.targetRoles.includes('Distributor') ?? true)
   const [publishRetailer, setPublishRetailer] = useState(initial?.targetRoles.includes('Retailer') ?? true)
@@ -526,13 +502,7 @@ function AddPromotionModal({
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(initial?.imageUrl ?? null)
   const [error, setError] = useState<string | null>(null)
-  const [typeOpen, setTypeOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-
-  const dims = useMemo(
-    () => (type === 'NewsletterPopUp' ? '335 x 156 pixels' : '330 x 330 pixels'),
-    [type]
-  )
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -542,13 +512,13 @@ function AddPromotionModal({
       ].filter(Boolean).join(',')
       if (!roles) throw new Error('Select at least one Publish To audience.')
       if (!title.trim()) throw new Error('Title is required.')
-      if (!initial && !file) throw new Error('Banner image is required.')
+      if (!initial && !file) throw new Error('Popup image is required.')
       if (!startDate || !endDate) throw new Error('Start and end dates are required.')
       if (endDate < startDate) throw new Error('End date must be after start date.')
 
       const form = new FormData()
       form.append('title', title.trim())
-      form.append('type', type)
+      form.append('type', 'LoginPopup')
       form.append('targetRoles', roles)
       form.append('isActive', String(isActive))
       form.append('startDateUtc', new Date(`${startDate}T00:00:00.000Z`).toISOString())
@@ -564,52 +534,22 @@ function AddPromotionModal({
     onError: (e: unknown) => {
       setError((e as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message
         ?? (e as Error)?.message
-        ?? 'Could not save advertisement.')
+        ?? 'Could not save login popup.')
     }
   })
 
   return (
-    <ModalShell title={initial ? 'Edit Advertisement' : 'Add Advertisement'} onClose={onClose}>
+    <ModalShell title={initial ? 'Edit login popup' : 'Add login popup'} onClose={onClose}>
       <p className="text-xs text-suzuki-mute mb-5">
-        When active and within the date range, this shows as a popup after Distributor / Retailer login.
+        When active and within the date range, popups show one after another after Distributor / Retailer login (close one to see the next).
       </p>
 
       {error && <ErrorBox message={error} />}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="block space-y-1.5">
-          <span className="text-sm font-bold text-suzuki-navy">Title</span>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} className="field" placeholder="Promotion" />
-        </label>
-        <div className="relative space-y-1.5">
-          <span className="text-sm font-bold text-suzuki-navy">Type</span>
-          <button
-            type="button"
-            onClick={() => setTypeOpen((v) => !v)}
-            className="field w-full text-left flex items-center justify-between"
-          >
-            {typeLabel(type)}
-            <span className="text-suzuki-mute text-xs">▾</span>
-          </button>
-          {typeOpen && (
-            <div className="absolute z-10 mt-1 w-full rounded-xl border border-suzuki-line bg-white shadow-card overflow-hidden">
-              {(['NewsletterPopUp', 'PromotionBanner'] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  className={clsx(
-                    'w-full text-left px-3 py-2.5 text-sm font-semibold',
-                    type === t ? 'bg-sky-50 text-suzuki-navy' : 'hover:bg-suzuki-mist text-suzuki-ink'
-                  )}
-                  onClick={() => { setType(t); setTypeOpen(false) }}
-                >
-                  {typeLabel(t)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+      <label className="block space-y-1.5">
+        <span className="text-sm font-bold text-suzuki-navy">Title</span>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} className="field" placeholder="Promotion title" />
+      </label>
 
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block space-y-1.5">
@@ -623,9 +563,9 @@ function AddPromotionModal({
       </div>
 
       <div className="mt-4 space-y-1.5">
-        <div className="text-sm font-bold text-suzuki-navy">Banner Image</div>
+        <div className="text-sm font-bold text-suzuki-navy">Popup image</div>
         <div className="text-xs text-suzuki-mute">
-          Required aspect: {dims} · JPG/PNG
+          Required aspect: 4:3 · JPG/PNG
         </div>
         <ImageDropZone preview={preview} onPick={() => fileRef.current?.click()} />
         <input
@@ -636,7 +576,7 @@ function AddPromotionModal({
           onChange={(e) => {
             const f = e.target.files?.[0] ?? null
             if (!f) return
-            void validateBannerAspect(f, type)
+            void validateBannerAspect(f, 'LoginPopup')
               .then(() => {
                 setError(null)
                 setFile(f)

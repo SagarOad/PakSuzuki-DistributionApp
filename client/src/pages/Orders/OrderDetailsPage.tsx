@@ -9,15 +9,20 @@ import clsx from 'clsx'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
 import { downloadExcel } from '@/utils/excelExport'
+import { RejectOrderModal } from '@/components/ui/RejectOrderModal'
 import {
   type OrderDetail,
+  type OrderLineItem,
   type UiOrderStatus,
   formatOrderDate,
   formatRs,
   getOrderTracking,
   locationLine,
+  resolveShipToDelivery,
   displayOrderQty,
   displayLineAmount,
+  lineLiters,
+  orderTotalLiters,
   toUiStatus,
   uiStatusToApi
 } from './orderTypes'
@@ -42,6 +47,8 @@ export default function OrderDetailsPage() {
   const [error, setError] = useState<string | null>(null)
   const [passModalOpen, setPassModalOpen] = useState(false)
   const [shipTo, setShipTo] = useState<'Distributor' | 'Retailer'>('Distributor')
+  const [rejectModalOpen, setRejectModalOpen] = useState(false)
+  const [rejectNote, setRejectNote] = useState('')
 
   const isStaff = role === 'SuperAdmin' || role === 'Admin'
   const isDistributor = role === 'Distributor'
@@ -86,14 +93,18 @@ export default function OrderDetailsPage() {
       await invalidate()
     },
     onError: (e: unknown) => {
-      setError((e as { response?: { data?: { message?: string } } })?.response?.data?.message
-        ?? 'Could not update order status.')
+      const data = (e as { response?: { data?: { detail?: string; title?: string; message?: string } } })
+        ?.response?.data
+      setError(data?.detail || data?.title || data?.message || 'Could not update order status.')
     }
   })
 
   const pakSuzukiAction = useMutation({
-    mutationFn: async (decision: string) =>
-      api.post(`/orders/paksuzuki-action/${id}`, { decision, remarks: note || null }),
+    mutationFn: async ({ decision, remarks }: { decision: string; remarks?: string | null }) =>
+      api.post(`/orders/paksuzuki-action/${id}`, {
+        decision,
+        remarks: remarks !== undefined ? (remarks || null) : (note || null)
+      }),
     onSuccess: async () => {
       setError(null)
       await invalidate()
@@ -109,10 +120,11 @@ export default function OrderDetailsPage() {
       decision: string
       fulfillmentChoice?: string | null
       pakSuzukiShipTo?: string | null
+      remarks?: string | null
     }) =>
       api.post(`/orders/distributor-action/${id}`, {
         decision: payload.decision,
-        remarks: note || null,
+        remarks: payload.remarks !== undefined ? (payload.remarks || null) : (note || null),
         amendedItems: null,
         fulfillmentChoice: payload.fulfillmentChoice ?? null,
         pakSuzukiShipTo: payload.pakSuzukiShipTo ?? null
@@ -211,7 +223,7 @@ export default function OrderDetailsPage() {
     setError(null)
     try {
       if (canStaffPending) {
-        await pakSuzukiAction.mutateAsync('ApprovedByPakSuzuki')
+        await pakSuzukiAction.mutateAsync({ decision: 'ApprovedByPakSuzuki' })
         return
       }
       if (canDistributorReviewPakSuzukiAmendment) {
@@ -252,21 +264,26 @@ export default function OrderDetailsPage() {
     }
   }
 
-  const cancelOrder = async () => {
+  const cancelOrder = () => {
     if (!order) return
-    const ok = window.confirm(
-      canStaffPending
-        ? 'Cancel / reject this manufacturer order?'
-        : 'Reject this order and send it back to the retailer for changes?'
-    )
-    if (!ok) return
+    setRejectNote(note)
+    setRejectModalOpen(true)
+  }
+
+  const confirmRejectOrder = async () => {
+    if (!order) return
     setError(null)
-    if (canStaffPending) {
-      await pakSuzukiAction.mutateAsync('Cancelled')
-      return
-    }
-    if (canDistributorConfirm) {
-      await distributorAction.mutateAsync({ decision: 'RejectedByDistributor' })
+    const remarks = rejectNote.trim() || null
+    setNote(rejectNote)
+    try {
+      if (canStaffPending) {
+        await pakSuzukiAction.mutateAsync({ decision: 'Cancelled', remarks })
+      } else if (canDistributorConfirm) {
+        await distributorAction.mutateAsync({ decision: 'RejectedByDistributor', remarks })
+      }
+      setRejectModalOpen(false)
+    } catch {
+      /* error state set by mutation */
     }
   }
 
@@ -305,7 +322,12 @@ export default function OrderDetailsPage() {
   }
 
   const applyUiStatus = async (ui: UiOrderStatus) => {
-    if (!window.confirm(`Change order status to "${ui}"?`)) return
+    const display =
+      ui === 'In Process' ? 'Pending'
+      : ui === 'Delivery In Process' ? 'In Process'
+      : ui === 'Completed' ? 'Delivered'
+      : ui
+    if (!window.confirm(`Change order status to "${display}"?`)) return
     await patchStatus.mutateAsync(uiStatusToApi(ui))
   }
 
@@ -326,7 +348,6 @@ export default function OrderDetailsPage() {
 
   const showCompletedTabs = uiStatus === 'Completed' || uiStatus === 'Cancelled'
   const activeTab = showCompletedTabs ? tab : 'details'
-  const allowsPartialDelivery = order.allowsPartialDelivery
   const showTracking =
     !showCompletedTabs &&
     (uiStatus === 'In Process' ||
@@ -427,36 +448,32 @@ export default function OrderDetailsPage() {
 
       {activeTab === 'summary' ? (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <OrderInfoCard {...orderInfoProps} />
-            <DeliveryDetailsCard
-              order={order}
-              showProof
-            />
-          </div>
+          <OrderInfoCard
+            {...orderInfoProps}
+            showProof
+          />
           <OrderSummaryCard
             order={order}
             uiStatus={uiStatus}
             canEditStatus={canEditStatus}
             onEditStatus={() => setStatusModalOpen(true)}
+            showMargins={isStaff}
           />
           {showTracking && <OrderTrackingPanel tracking={tracking} />}
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <OrderInfoCard {...orderInfoProps} />
-            <DeliveryDetailsCard
-              order={order}
-              showProof={uiStatus === 'Completed' || uiStatus === 'Delivery In Process'}
-            />
-          </div>
+          <OrderInfoCard
+            {...orderInfoProps}
+            showProof={uiStatus === 'Completed' || uiStatus === 'Delivery In Process'}
+          />
 
           <OrderSummaryCard
             order={order}
             uiStatus={uiStatus}
             canEditStatus={canEditStatus}
             onEditStatus={() => setStatusModalOpen(true)}
+            showMargins={isStaff}
             note={note}
             onNoteChange={setNote}
             showNote={showDistributorPendingActions || canStaffPending || canShip}
@@ -468,12 +485,10 @@ export default function OrderDetailsPage() {
                 uiStatus={uiStatus}
                 busy={busy}
                 canShip={canShip}
-                allowsPartialDelivery={allowsPartialDelivery}
                 showPendingActions={showDistributorPendingActions || canStaffPending}
                 showFulfillTools={canDistributorFulfillTools}
                 resubmitToPakSuzuki={canDistributorReviewPakSuzukiAmendment}
                 thresholdMet={thresholdMet}
-                needsLabelsFlow={isShipToParty && isStaff}
                 onCancel={
                   canDistributorReviewPakSuzukiAmendment
                     ? undefined
@@ -513,7 +528,6 @@ export default function OrderDetailsPage() {
           onClose={() => setStatusModalOpen(false)}
           onSelect={applyUiStatus}
           busy={busy}
-          allowsPartialDelivery={allowsPartialDelivery}
         />
       )}
 
@@ -581,6 +595,23 @@ export default function OrderDetailsPage() {
           </div>
         </div>
       )}
+
+      {rejectModalOpen && (
+        <RejectOrderModal
+          title={canStaffPending ? 'Cancel order' : 'Reject order'}
+          description={
+            canStaffPending
+              ? 'Cancel / reject this manufacturer order. You can leave an optional note for the distributor.'
+              : 'Reject this order permanently. The retailer cannot amend or resubmit it. You can leave an optional note.'
+          }
+          confirmLabel={canStaffPending ? 'Cancel order' : 'Reject order'}
+          note={rejectNote}
+          busy={busy}
+          onNoteChange={setRejectNote}
+          onBack={() => setRejectModalOpen(false)}
+          onConfirm={() => void confirmRejectOrder()}
+        />
+      )}
     </div>
   )
 }
@@ -593,7 +624,8 @@ function OrderInfoCard({
   canRetrySap,
   sapBusy,
   onRefreshSap,
-  onRetrySap
+  onRetrySap,
+  showProof
 }: {
   order: OrderDetail
   uiStatus: UiOrderStatus
@@ -603,31 +635,43 @@ function OrderInfoCard({
   sapBusy?: boolean
   onRefreshSap?: () => void
   onRetrySap?: () => void
+  showProof?: boolean
 }) {
   const sapSummary = manufacturerQueueSummary(order)
+  const shipTo = resolveShipToDelivery(order)
 
   return (
-    <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4">
-      <h2 className="text-xl font-extrabold text-suzuki-blue">
-        Order Number : {order.orderNumber}
-      </h2>
+    <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-4 sm:p-5 space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <h2 className="text-lg sm:text-xl font-extrabold text-suzuki-blue">
+          Order Number : {order.orderNumber}
+        </h2>
+        <StatusPill
+          status={uiStatus}
+          label={order.statusLabel || undefined}
+          statusColor={order.statusColor}
+        />
+      </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2">
         <Field label="Order Date" value={formatOrderDate(order.createdAtUtc)} />
-        <div>
-          <Label>Order Status</Label>
-          <StatusPill
-            status={uiStatus}
-            label={order.statusLabel || undefined}
-            statusColor={order.statusColor}
-          />
-        </div>
+        <Field label={shipTo.nameLabel} value={shipTo.name} />
+        <Field label="Contact" value={shipTo.mobile} />
+        <Field
+          label="Location"
+          value={locationLine(shipTo.regionName, shipTo.address)}
+        />
+        <Field
+          label="Delivery address"
+          value={shipTo.address || '—'}
+          className="sm:col-span-2"
+        />
       </div>
 
       {(order.materialSourceCode || order.deliveryTypeCode || order.supplierCode) && (
-        <div className="border-t border-suzuki-line pt-4 space-y-3">
-          <h3 className="font-bold text-suzuki-navy">PO lane</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="border-t border-suzuki-line pt-3 space-y-2">
+          <h3 className="text-sm font-bold text-suzuki-navy">PO lane</h3>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2">
             <Field label="Vendor" value={order.vendorCode || 'PSMC'} />
             <Field label="Source" value={order.materialSourceCode || '—'} />
             <Field
@@ -644,9 +688,9 @@ function OrderInfoCard({
       )}
 
       {(order.thresholdMet || order.snapshotDistributorCode || order.fulfillmentChoice) && (
-        <div className="border-t border-suzuki-line pt-4 space-y-3">
-          <h3 className="font-bold text-suzuki-navy">Fulfillment</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="border-t border-suzuki-line pt-3 space-y-2">
+          <h3 className="text-sm font-bold text-suzuki-navy">Fulfillment</h3>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2">
             <Field label="Threshold" value={order.thresholdMet ? 'Met' : 'Not met'} />
             <Field label="Choice" value={order.fulfillmentChoice === 'PassToPakSuzuki' ? 'Pass to Pak Suzuki' : order.fulfillmentChoice === 'DistributorSelf' ? 'Distributor fulfills' : '—'} />
             <Field label="Pak Suzuki ship to" value={order.pakSuzukiShipTo || '—'} />
@@ -655,38 +699,66 @@ function OrderInfoCard({
             <Field label="Ship-to code" value={order.shipToCode || '—'} />
             <Field label="Bill-to code" value={order.billToCode || '—'} />
           </div>
+          {order.pakSuzukiShipTo && (
+            <div className="rounded-xl bg-suzuki-mist/70 border border-suzuki-line px-3 py-2.5 space-y-1">
+              <p className="text-xs font-bold text-suzuki-mute uppercase tracking-wide">
+                Ship-to delivery details ({shipTo.partyKind})
+              </p>
+              <p className="text-sm font-bold text-suzuki-navy">{shipTo.name}</p>
+              <p className="text-sm text-suzuki-navy">{shipTo.mobile}</p>
+              <p className="text-sm text-suzuki-navy leading-snug">{shipTo.address || '—'}</p>
+              {shipTo.regionName && (
+                <p className="text-xs text-suzuki-mute">{shipTo.regionName}</p>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      <div className="border-t border-suzuki-line pt-4 space-y-3">
-        <h3 className="font-bold text-suzuki-navy">
-          {order.retailerName ? 'Retailer Detail' : 'Distributor Detail'}
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field
-            label={order.retailerName ? 'Retailor Name' : 'Distributor Name'}
-            value={order.retailerName || order.distributorName}
-          />
-          <Field
-            label="Location"
-            value={locationLine(order.regionName, order.retailerAddress || order.distributorAddress)}
-          />
-          <Field
-            label="Address"
-            value={order.retailerAddress || order.distributorAddress || '—'}
-            className="sm:col-span-2"
-          />
-          <Field
-            label="Contact Number"
-            value={order.retailerMobile || order.distributorMobile || '—'}
-          />
+      {order.distributorRemarks && (
+        <div className="border-t border-suzuki-line pt-3">
+          <h3 className="text-sm font-bold text-suzuki-navy mb-1.5">Tracking note</h3>
+          <p className="text-sm text-suzuki-navy leading-snug rounded-lg bg-suzuki-mist/60 px-3 py-2">
+            {order.distributorRemarks}
+          </p>
         </div>
-      </div>
+      )}
+
+      {showProof && (
+        <div className="border-t border-suzuki-line pt-3">
+          <Label>Delivery attachment</Label>
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {order.proofsOfDelivery.length === 0 ? (
+              <div className="h-20 w-20 rounded-lg bg-sky-50 border border-sky-100 flex items-center justify-center">
+                <span className="text-suzuki-mute font-bold text-[10px] flex flex-col items-center gap-0.5">
+                  <ImageIcon size={18} /> None
+                </span>
+              </div>
+            ) : (
+              order.proofsOfDelivery.map((proof) => (
+                <a
+                  key={proof.id}
+                  href={proof.storageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="h-20 w-20 rounded-lg bg-sky-50 border border-sky-100 overflow-hidden flex flex-col items-center justify-center p-1.5 text-center"
+                >
+                  {proof.fileName.match(/\.(png|jpe?g|gif|webp)$/i) ? (
+                    <img src={proof.storageUrl} alt={proof.fileName} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-[10px] font-semibold text-suzuki-navy break-all">{proof.fileName}</span>
+                  )}
+                </a>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {showManufacturerQueue && (
-        <div className="border-t border-suzuki-line pt-4 space-y-3">
+        <div className="border-t border-suzuki-line pt-3 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="font-bold text-suzuki-navy">Manufacturer / SAP queue</h3>
+            <h3 className="text-sm font-bold text-suzuki-navy">Manufacturer / SAP queue</h3>
             <div className="flex flex-wrap gap-2">
               {canRefreshSap && (
                 <button
@@ -713,7 +785,7 @@ function OrderInfoCard({
 
           <div
             className={clsx(
-              'rounded-xl px-4 py-3 text-sm font-semibold',
+              'rounded-lg px-3 py-2 text-sm font-semibold',
               sapSummary.tone === 'green' && 'bg-emerald-50 text-emerald-800 border border-emerald-200',
               sapSummary.tone === 'amber' && 'bg-amber-50 text-amber-900 border border-amber-200',
               sapSummary.tone === 'red' && 'bg-rose-50 text-rose-800 border border-rose-200',
@@ -721,10 +793,10 @@ function OrderInfoCard({
             )}
           >
             {sapSummary.title}
-            <p className="mt-1 text-xs font-normal opacity-90">{sapSummary.detail}</p>
+            <p className="mt-0.5 text-xs font-normal opacity-90">{sapSummary.detail}</p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2">
             <Field label="PO Ref" value={order.poRef || order.orderNumber} />
             <Field label="Queue status" value={order.middlewareStatus || '—'} />
             <Field label="SAP sales order #" value={order.sapDocumentNumber || 'Not created yet'} />
@@ -739,8 +811,7 @@ function OrderInfoCard({
             )}
           </div>
           <p className="text-[11px] text-suzuki-mute">
-            Queued = row in parts_order waiting for middleware. Sales order / delivery / invoice fill in after
-            SAP writes back.{' '}
+            Queued = waiting for middleware. Sales order / delivery / invoice fill in after SAP writes back.{' '}
             <a href="/orders/middleware" className="text-suzuki-blue font-semibold hover:underline">
               Open SAP Queue
             </a>
@@ -813,73 +884,27 @@ function manufacturerQueueSummary(order: OrderDetail): {
   }
 }
 
-function DeliveryDetailsCard({
-  order,
-  showProof
-}: {
-  order: OrderDetail
-  showProof?: boolean
-}) {
-  const deliveryName = order.retailerName || order.distributorName
-  const deliveryAddress = order.retailerAddress || order.distributorAddress
-  const deliveryMobile = order.retailerMobile || order.distributorMobile
-
-  return (
-    <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-4">
-      <div className="space-y-3">
-        <h3 className="font-bold text-suzuki-navy">Delivery Details</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Address" value={deliveryAddress || '—'} className="sm:col-span-2" />
-          <Field label="Location" value={locationLine(order.regionName, deliveryAddress)} />
-          <Field
-            label={order.retailerName ? 'Retailor Name' : 'Distributor Name'}
-            value={deliveryName || '—'}
-          />
-          <Field label="Contact Number" value={deliveryMobile || '—'} />
-        </div>
-      </div>
-
-      {order.distributorRemarks && (
-        <div>
-          <h3 className="font-bold text-suzuki-navy mb-2">Tracking Note</h3>
-          <p className="text-sm text-suzuki-navy leading-relaxed rounded-xl bg-suzuki-mist/60 px-4 py-3">
-            {order.distributorRemarks}
-          </p>
-        </div>
-      )}
-
-      {showProof && (
-        <div>
-          <Label>Delivery Attachment</Label>
-          <div className="mt-1.5 flex flex-wrap gap-2">
-            {order.proofsOfDelivery.length === 0 ? (
-              <div className="aspect-square max-w-[140px] w-full rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center">
-                <span className="text-suzuki-mute font-bold text-sm flex flex-col items-center gap-1">
-                  <ImageIcon size={22} /> No file yet
-                </span>
-              </div>
-            ) : (
-              order.proofsOfDelivery.map((proof) => (
-                <a
-                  key={proof.id}
-                  href={proof.storageUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="aspect-square w-[140px] rounded-xl bg-sky-50 border border-sky-100 overflow-hidden flex flex-col items-center justify-center p-2 text-center"
-                >
-                  {proof.fileName.match(/\.(png|jpe?g|gif|webp)$/i) ? (
-                    <img src={proof.storageUrl} alt={proof.fileName} className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-xs font-semibold text-suzuki-navy break-all">{proof.fileName}</span>
-                  )}
-                </a>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-    </section>
-  )
+function lineProfitMargins(item: OrderLineItem) {
+  const sale = Number(item.salePrice)
+  const purchase = Number(item.purchasePrice)
+  const cost = Number(item.costPrice)
+  const qty = displayOrderQty(item)
+  if (!sale || Number.isNaN(sale) || sale <= 0) {
+    return null
+  }
+  const safePurchase = Number.isNaN(purchase) ? 0 : purchase
+  const safeCost = Number.isNaN(cost) ? 0 : cost
+  const suzukiPct = Math.max(0, Math.round(((sale - safePurchase) / sale) * 1000) / 10)
+  const distributorPct = Math.max(0, Math.round(((safePurchase - safeCost) / sale) * 1000) / 10)
+  return {
+    suzukiPct,
+    distributorPct,
+    suzukiAmount: Math.max(0, Math.round((sale - safePurchase) * qty * 100) / 100),
+    distributorAmount: Math.max(0, Math.round((safePurchase - safeCost) * qty * 100) / 100),
+    cost: safeCost,
+    purchase: safePurchase,
+    sale
+  }
 }
 
 function OrderSummaryCard({
@@ -893,6 +918,7 @@ function OrderSummaryCard({
   distributorNote,
   pakSuzukiNote,
   retailerNote,
+  showMargins,
   footer
 }: {
   order: OrderDetail
@@ -905,10 +931,15 @@ function OrderSummaryCard({
   distributorNote?: string | null
   pakSuzukiNote?: string | null
   retailerNote?: string | null
+  showMargins?: boolean
   footer?: ReactNode
 }) {
+  const totalLiters = orderTotalLiters(order.items, order.totalLiters)
+  const totalPacks = order.items.reduce((s, i) => s + displayOrderQty(i), 0)
+  const shipTo = resolveShipToDelivery(order)
+
   return (
-    <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-5 space-y-5">
+    <section className="bg-white rounded-2xl border border-suzuki-line shadow-card p-4 sm:p-5 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-lg font-extrabold text-suzuki-navy">Order Summary</h3>
         <button
@@ -920,12 +951,20 @@ function OrderSummaryCard({
                 { header: 'Product', value: (i) => i.productName },
                 { header: 'SKU', value: (i) => i.productSku },
                 { header: 'Category', value: (i) => i.categoryName ?? '' },
-                { header: 'Qty', value: (i) => displayOrderQty(i) },
+                { header: 'Qty (packs)', value: (i) => displayOrderQty(i) },
+                { header: 'Liters', value: (i) => lineLiters(i) ?? '' },
                 { header: 'Unit', value: (i) => i.requestedUnit },
                 { header: 'Unit Price', value: (i) => i.unitPrice },
                 { header: 'Line Subtotal', value: (i) => displayLineAmount(i) },
                 { header: 'GST', value: (i) => i.lineGst },
-                { header: 'FED', value: (i) => i.lineFed }
+                { header: 'FED', value: (i) => i.lineFed },
+                ...(showMargins
+                  ? [
+                      { header: 'Cost', value: (i: OrderLineItem) => i.costPrice ?? '' },
+                      { header: 'Purchase', value: (i: OrderLineItem) => i.purchasePrice ?? '' },
+                      { header: 'Sale', value: (i: OrderLineItem) => i.salePrice ?? '' }
+                    ]
+                  : [])
               ],
               order.items
             )
@@ -934,6 +973,16 @@ function OrderSummaryCard({
         >
           <FileSpreadsheet size={14} /> Export Excel
         </button>
+      </div>
+
+      <div className="rounded-xl border border-suzuki-line bg-suzuki-mist/40 px-3 py-2.5 space-y-1">
+        <p className="text-xs font-bold text-suzuki-mute uppercase tracking-wide">
+          Delivery / ship-to ({shipTo.partyKind}
+          {order.thresholdMet && order.pakSuzukiShipTo ? ` · threshold` : ''})
+        </p>
+        <p className="text-sm font-bold text-suzuki-navy">{shipTo.name}</p>
+        <p className="text-sm text-suzuki-navy">{shipTo.mobile}</p>
+        <p className="text-sm text-suzuki-navy leading-snug">{shipTo.address || '—'}</p>
       </div>
 
       {retailerNote ? (
@@ -958,48 +1007,90 @@ function OrderSummaryCard({
       ) : null}
 
       <div className="space-y-3">
-        {order.items.map((item) => (
-          <div
-            key={item.id}
-            className="flex flex-col sm:flex-row sm:items-center gap-4 rounded-xl border border-suzuki-line/80 bg-suzuki-mist/30 p-3"
-          >
-            <div className="h-20 w-20 rounded-lg bg-white border border-suzuki-line flex items-center justify-center overflow-hidden shrink-0">
-              {item.primaryImageUrl ? (
-                <img src={item.primaryImageUrl} alt="" className="h-full w-full object-contain" />
-              ) : (
-                <ImageIcon className="text-suzuki-mute" size={28} />
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="font-bold text-suzuki-navy leading-snug">{item.productName}</div>
-              {item.productBio && (
-                <div className="text-xs text-suzuki-mute mt-0.5">{item.productBio}</div>
-              )}
-              <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm">
-                <span>
-                  Selected Pack:{' '}
-                  <span className="font-bold text-suzuki-red">
-                    {item.variantTypeName || item.requestedUnit}
-                  </span>
-                </span>
-                <span>
-                  Unit:{' '}
-                  <span className="font-bold text-suzuki-red">{displayOrderQty(item)}</span>
-                  {item.approvedQuantity != null &&
-                    item.approvedQuantity !== item.requestedQuantity && (
-                      <span className="text-suzuki-mute font-semibold">
-                        {' '}
-                        (requested {item.requestedQuantity})
+        {order.items.map((item) => {
+          const margins = showMargins ? lineProfitMargins(item) : null
+          return (
+            <div
+              key={item.id}
+              className="rounded-xl border border-suzuki-line/80 bg-suzuki-mist/30 p-3 space-y-3"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                <div className="h-20 w-20 rounded-lg bg-white border border-suzuki-line flex items-center justify-center overflow-hidden shrink-0">
+                  {item.primaryImageUrl ? (
+                    <img src={item.primaryImageUrl} alt="" className="h-full w-full object-contain" />
+                  ) : (
+                    <ImageIcon className="text-suzuki-mute" size={28} />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-suzuki-navy leading-snug">{item.productName}</div>
+                  {item.productBio && (
+                    <div className="text-xs text-suzuki-mute mt-0.5">{item.productBio}</div>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                    <span>
+                      Selected Pack:{' '}
+                      <span className="font-bold text-suzuki-red">
+                        {item.variantTypeName || item.requestedUnit}
+                      </span>
+                    </span>
+                    <span>
+                      Packs:{' '}
+                      <span className="font-bold text-suzuki-red">{displayOrderQty(item)}</span>
+                      {item.approvedQuantity != null &&
+                        item.approvedQuantity !== item.requestedQuantity && (
+                          <span className="text-suzuki-mute font-semibold">
+                            {' '}
+                            (requested {item.requestedQuantity})
+                          </span>
+                        )}
+                    </span>
+                    {lineLiters(item) != null && (
+                      <span>
+                        Liters:{' '}
+                        <span className="font-bold text-suzuki-red">
+                          {lineLiters(item)} L
+                        </span>
+                        {item.packQuantity && item.unitValue ? (
+                          <span className="text-suzuki-mute font-semibold">
+                            {' '}
+                            ({item.packQuantity} × {item.unitValue} L)
+                          </span>
+                        ) : null}
                       </span>
                     )}
-                </span>
+                  </div>
+                </div>
+                <div className="text-lg font-extrabold text-suzuki-blue sm:text-right shrink-0">
+                  {formatRs(displayLineAmount(item))}
+                </div>
               </div>
+
+              {margins && (
+                <div className="rounded-xl border border-suzuki-line bg-white/80 p-3 space-y-3">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-suzuki-mute">
+                    <span>Cost {formatRs(margins.cost)}</span>
+                    <span>Purchase {formatRs(margins.purchase)}</span>
+                    <span>Sale {formatRs(margins.sale)}</span>
+                    <span className="text-suzuki-mute/80">per pack · margins × qty</span>
+                  </div>
+                  <OrderProfitBar
+                    label="Pak Suzuki Profit"
+                    percent={margins.suzukiPct}
+                    amount={margins.suzukiAmount}
+                    icon="suzuki"
+                  />
+                  <OrderProfitBar
+                    label="Distributor Profit"
+                    percent={margins.distributorPct}
+                    amount={margins.distributorAmount}
+                    icon="truck"
+                  />
+                </div>
+              )}
             </div>
-            <div className="text-lg font-extrabold text-suzuki-blue sm:text-right shrink-0">
-              {formatRs(displayLineAmount(item))}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       <div className="flex flex-col lg:flex-row lg:items-end gap-4 justify-between border-t border-suzuki-line pt-4">
@@ -1021,6 +1112,16 @@ function OrderSummaryCard({
         </div>
 
         <div className="text-right space-y-1 min-w-[220px]">
+          <div className="flex justify-between gap-8 text-sm">
+            <span className="text-suzuki-mute font-semibold">Total packs</span>
+            <span className="font-bold text-suzuki-navy">{totalPacks}</span>
+          </div>
+          {totalLiters != null && (
+            <div className="flex justify-between gap-8 text-sm">
+              <span className="text-suzuki-mute font-semibold">Total liters</span>
+              <span className="font-bold text-suzuki-navy">{totalLiters.toLocaleString('en-PK')} L</span>
+            </div>
+          )}
           <div className="flex justify-between gap-8 text-sm">
             <span className="text-suzuki-mute font-semibold">Subtotal</span>
             <span className="font-bold text-suzuki-red">{formatRs(order.subTotal)}</span>
@@ -1069,16 +1170,51 @@ function OrderSummaryCard({
   )
 }
 
+function OrderProfitBar({
+  label,
+  percent,
+  amount,
+  icon
+}: {
+  label: string
+  percent: number
+  amount: number
+  icon: 'suzuki' | 'truck'
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5 gap-2">
+        <div className="flex items-center gap-2 text-sm font-bold text-suzuki-navy">
+          {icon === 'truck' ? (
+            <Truck size={16} className="text-suzuki-blue" />
+          ) : (
+            <span className="text-suzuki-red text-xs font-black">S</span>
+          )}
+          {label}
+        </div>
+        <div className="text-right shrink-0">
+          <span className="text-sm font-bold text-suzuki-ink">{percent}%</span>
+          <span className="ml-2 text-xs font-semibold text-suzuki-mute">{formatRs(amount)}</span>
+        </div>
+      </div>
+      <div className="h-2 rounded-full bg-suzuki-line overflow-hidden">
+        <div
+          className={icon === 'truck' ? 'h-full bg-suzuki-blue rounded-full' : 'h-full bg-suzuki-red rounded-full'}
+          style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
 function OrderActions({
   uiStatus,
   busy,
   canShip,
-  allowsPartialDelivery,
   showPendingActions,
   showFulfillTools,
   resubmitToPakSuzuki,
   thresholdMet,
-  needsLabelsFlow,
   onCancel,
   onConfirm,
   onAmend,
@@ -1091,14 +1227,12 @@ function OrderActions({
   busy: boolean
   /** Only the party who delivers may Start Delivery / Mark Delivered. */
   canShip: boolean
-  allowsPartialDelivery: boolean
   showPendingActions: boolean
   /** Distributor fulfill tools (fulfill myself / pass to manufacturer). */
   showFulfillTools: boolean
   /** Direct order returned by Pak Suzuki — resubmit only. */
   resubmitToPakSuzuki?: boolean
   thresholdMet?: boolean
-  needsLabelsFlow: boolean
   onCancel?: () => void
   onConfirm: () => void
   onAmend?: () => void
@@ -1141,7 +1275,7 @@ function OrderActions({
               onClick={onCancel}
               className="flex-1 rounded-xl bg-sky-100 text-suzuki-navy font-extrabold py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
             >
-              {showFulfillTools ? 'REJECT / SEND BACK' : 'CANCELED'}
+              {showFulfillTools ? 'REJECT' : 'CANCELED'}
             </button>
           )}
           {onAmend && (
@@ -1186,28 +1320,19 @@ function OrderActions({
     return null
   }
 
+  // After approval: always move tracking Pending → In Process first (API: PartiallyDelivered).
+  // DELIVERED is only offered once status is already In Process / Delivery In Process.
   if (uiStatus === 'In Process') {
     return (
       <div className="flex justify-end pt-2">
-        {allowsPartialDelivery ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onStartDelivery}
-            className="rounded-xl bg-suzuki-red text-white font-extrabold px-8 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
-          >
-            {needsLabelsFlow ? 'START DELIVERY' : 'START DELIVERY'}
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onMarkDelivered}
-            className="rounded-xl bg-suzuki-navy text-white font-extrabold px-8 py-3 tracking-wide hover:bg-suzuki-blue disabled:opacity-50"
-          >
-            MARK AS DELIVERED
-          </button>
-        )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onStartDelivery}
+          className="rounded-xl bg-suzuki-red text-white font-extrabold px-8 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
+        >
+          IN PROCESS
+        </button>
       </div>
     )
   }
@@ -1221,7 +1346,7 @@ function OrderActions({
           onClick={onMarkDelivered}
           className="rounded-xl bg-suzuki-navy text-white font-extrabold px-8 py-3 tracking-wide hover:bg-suzuki-blue disabled:opacity-50"
         >
-          MARK AS DELIVERED
+          DELIVERED
         </button>
       </div>
     )
@@ -1233,21 +1358,17 @@ function OrderActions({
 function ChangeStatusModal({
   onClose,
   onSelect,
-  busy,
-  allowsPartialDelivery
+  busy
 }: {
   onClose: () => void
   onSelect: (s: UiOrderStatus) => void
   busy: boolean
-  allowsPartialDelivery: boolean
 }) {
-  const options: { label: UiOrderStatus; cls: string }[] = [
-    ...(allowsPartialDelivery
-      ? [{ label: 'Delivery In Process' as UiOrderStatus, cls: 'bg-orange-50 text-orange-600 hover:bg-orange-100' }]
-      : []),
-    { label: 'Completed', cls: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' },
-    { label: 'Cancelled', cls: 'bg-slate-100 text-slate-600 hover:bg-slate-200' },
-    { label: 'In Process', cls: 'bg-rose-50 text-rose-600 hover:bg-rose-100' }
+  const options: { value: UiOrderStatus; display: string; cls: string }[] = [
+    { value: 'In Process', display: 'Pending', cls: 'bg-amber-50 text-amber-800 hover:bg-amber-100' },
+    { value: 'Delivery In Process', display: 'In Process', cls: 'bg-orange-50 text-orange-600 hover:bg-orange-100' },
+    { value: 'Completed', display: 'Delivered', cls: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' },
+    { value: 'Cancelled', display: 'Cancelled', cls: 'bg-slate-100 text-slate-600 hover:bg-slate-200' }
   ]
 
   return (
@@ -1267,16 +1388,16 @@ function ChangeStatusModal({
         <div className="grid grid-cols-2 gap-3">
           {options.map((o) => (
             <button
-              key={o.label}
+              key={o.value}
               type="button"
               disabled={busy}
-              onClick={() => onSelect(o.label)}
+              onClick={() => onSelect(o.value)}
               className={clsx(
                 'rounded-xl py-4 px-3 text-sm font-bold transition-colors disabled:opacity-50',
                 o.cls
               )}
             >
-              {o.label}
+              {o.display}
             </button>
           ))}
         </div>
@@ -1296,10 +1417,11 @@ function LabelsDeliveryModal({
   onClose: () => void
   onConfirm: () => void
 }) {
-  const name = order.retailerName || order.distributorName
-  const address = order.retailerAddress || order.distributorAddress || '—'
-  const mobile = order.retailerMobile || order.distributorMobile || '—'
-  const city = order.regionName || '—'
+  const shipTo = resolveShipToDelivery(order)
+  const name = shipTo.name
+  const address = shipTo.address || '—'
+  const mobile = shipTo.mobile || '—'
+  const city = shipTo.regionName || '—'
   const district = address.split(',').slice(-1)[0]?.trim() || '—'
 
   return (
@@ -1314,7 +1436,7 @@ function LabelsDeliveryModal({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Retailor Name" value={name || '—'} />
+          <Field label={`${shipTo.nameLabel} name`} value={name || '—'} />
           <Field label="City" value={city} />
           <Field label="District" value={district} />
           <Field label="Address" value={address} className="sm:col-span-2" />
@@ -1327,7 +1449,7 @@ function LabelsDeliveryModal({
           onClick={onConfirm}
           className="mt-6 w-full rounded-xl bg-suzuki-red text-white font-extrabold py-3.5 tracking-wide hover:bg-red-700 disabled:opacity-50"
         >
-          START DELIVERY AND GENERATE LABELS
+          IN PROCESS AND GENERATE LABELS
         </button>
       </div>
     </div>
@@ -1353,10 +1475,11 @@ function PodDeliveryModal({
   onFile: (file: File | null) => void
   onConfirm: () => void
 }) {
-  const name = order.retailerName || order.distributorName
-  const address = order.retailerAddress || order.distributorAddress || '—'
-  const mobile = order.retailerMobile || order.distributorMobile || '—'
-  const city = order.regionName || '—'
+  const shipTo = resolveShipToDelivery(order)
+  const name = shipTo.name
+  const address = shipTo.address || '—'
+  const mobile = shipTo.mobile || '—'
+  const city = shipTo.regionName || '—'
   const district = address.split(',').slice(-1)[0]?.trim() || '—'
 
   return (
@@ -1375,7 +1498,7 @@ function PodDeliveryModal({
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Retailor Name" value={name || '—'} />
+          <Field label={`${shipTo.nameLabel} name`} value={name || '—'} />
           <Field label="City" value={city} />
           <Field label="District" value={district} />
           <Field label="Address" value={address} className="sm:col-span-2" />
@@ -1454,16 +1577,16 @@ function OrderTrackingPanel({
 }) {
   const steps = [
     {
-      key: 'processed' as const,
-      label: 'Order Processed',
+      key: 'pending' as const,
+      label: 'Pending',
       icon: Package,
-      done: tracking.processed
+      done: tracking.pending
     },
     {
-      key: 'readyToShip' as const,
-      label: 'Ready To Ship',
+      key: 'inProcess' as const,
+      label: 'In Process',
       icon: Truck,
-      done: tracking.readyToShip
+      done: tracking.inProcess
     },
     {
       key: 'delivered' as const,

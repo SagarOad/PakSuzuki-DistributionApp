@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { api } from '@/api/axiosClient'
 
 export interface CartLine {
   productId: string
@@ -10,6 +11,9 @@ export interface CartLine {
   imageUrl?: string | null
   packLabel: string
   unitPrice: number
+  packQuantity?: number | null
+  unitValue?: number | null
+  unitType?: string | null
   /** Variant GST % — same basis as order creation (line subtotal × %). */
   gstPercent?: number
   /** Variant FED % — same basis as order creation. */
@@ -46,6 +50,11 @@ interface CartContextValue {
   removeItem: (productId: string, variantId: string) => void
   syncTaxRates: (
     rates: Record<string, { gstPercent: number; fedPercent: number }>
+  ) => void
+  patchLinePackMeta: (
+    productId: string,
+    variantId: string,
+    meta: Pick<CartLine, 'packQuantity' | 'unitValue' | 'unitType' | 'packLabel'>
   ) => void
   replaceFromRetailerOrder: (lines: CartLine[], originatingRetailerOrderId: string) => void
   setOrderContext: (ctx: OrderContext, options?: { clearCart?: boolean }) => void
@@ -112,6 +121,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
             ...existing,
             quantity: existing.quantity + qty,
             unitPrice: line.unitPrice,
+            packLabel: line.packLabel || existing.packLabel,
+            packQuantity: line.packQuantity ?? existing.packQuantity,
+            unitValue: line.unitValue ?? existing.unitValue,
+            unitType: line.unitType ?? existing.unitType,
             gstPercent: line.gstPercent ?? existing.gstPercent,
             fedPercent: line.fedPercent ?? existing.fedPercent
           }
@@ -152,6 +165,30 @@ export function CartProvider({ children }: { children: ReactNode }) {
       })
     }
 
+    const patchLinePackMeta: CartContextValue['patchLinePackMeta'] = (productId, variantId, meta) => {
+      setItems((prev) => {
+        let changed = false
+        const next = prev.map((x) => {
+          if (x.productId !== productId || x.variantId !== variantId) return x
+          const packQuantity = meta.packQuantity ?? x.packQuantity
+          const unitValue = meta.unitValue ?? x.unitValue
+          const unitType = meta.unitType ?? x.unitType
+          const packLabel = meta.packLabel || x.packLabel
+          if (
+            packQuantity === x.packQuantity &&
+            unitValue === x.unitValue &&
+            unitType === x.unitType &&
+            packLabel === x.packLabel
+          ) {
+            return x
+          }
+          changed = true
+          return { ...x, packQuantity, unitValue, unitType, packLabel }
+        })
+        return changed ? next : prev
+      })
+    }
+
     const replaceFromRetailerOrder: CartContextValue['replaceFromRetailerOrder'] = (
       lines,
       originatingRetailerOrderId
@@ -180,6 +217,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setQuantity,
       removeItem,
       syncTaxRates,
+      patchLinePackMeta,
       replaceFromRetailerOrder,
       setOrderContext,
       clearOrderContext: () => {
@@ -209,4 +247,39 @@ export function catalogFilterParams(ctx: OrderContext | null | undefined) {
     deliveryTypeCode: ctx.deliveryTypeCode,
     supplierCode: ctx.supplierCode
   }
+}
+
+/** Fill pack size / liters on older cart rows that were saved without those fields. */
+export function useHydrateCartPackMeta() {
+  const { items, patchLinePackMeta } = useCart()
+  const tried = useRef(new Set<string>())
+
+  useEffect(() => {
+    for (const item of items) {
+      if (item.unitValue != null && Number(item.unitValue) > 0) continue
+      if (tried.current.has(item.productId)) continue
+      tried.current.add(item.productId)
+      void api
+        .get<{
+          packQuantity?: number | null
+          unitValue?: number | null
+          unitType?: string | null
+          packLabel?: string | null
+          variants?: { id: string; packQuantity?: number | null; unitValue?: number | null; unitType?: string | null }[]
+        }>(`/catalog/products/${item.productId}`)
+        .then((res) => {
+          const d = res.data
+          const v = d.variants?.find((x) => x.id === item.variantId)
+          patchLinePackMeta(item.productId, item.variantId, {
+            packQuantity: d.packQuantity ?? v?.packQuantity ?? null,
+            unitValue: d.unitValue ?? v?.unitValue ?? null,
+            unitType: d.unitType ?? v?.unitType ?? null,
+            packLabel: item.packLabel
+          })
+        })
+        .catch(() => {
+          /* keep cart usable if catalog lookup fails */
+        })
+    }
+  }, [items, patchLinePackMeta])
 }

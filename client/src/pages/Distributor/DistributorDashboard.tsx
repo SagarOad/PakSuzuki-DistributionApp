@@ -202,7 +202,7 @@ export default function DistributorDashboard() {
               <p className="text-xs text-suzuki-mute mt-0.5">Open a category to start ordering</p>
             </div>
             <Link to="/order/start" className="text-xs font-bold text-suzuki-blue inline-flex items-center gap-1">
-              Catalog <ArrowRight size={12} />
+              Start Order <ArrowRight size={12} />
             </Link>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">

@@ -141,7 +141,7 @@ Only when order is **`PendingDistributorApproval`** (and belongs to that distrib
 | `PartiallyApprovedByDistributor` | Approve some qty only | `PartiallyApprovedByDistributor` | **required** |
 | `SentBackForModification` | Ask retailer to edit | `SentBackForModification` | optional |
 | `ForwardedToPakSuzuki` | Cannot fulfill → manufacturer | `PendingPakSuzukiApproval` | not required |
-| `RejectedByDistributor` | Reject | `RejectedByDistributor` | not required |
+| `RejectedByDistributor` | Final reject (no retailer amend) | `RejectedByDistributor` | not required |
 
 ### `amendedItems` shape (partial / send-back)
 
@@ -310,8 +310,8 @@ For Ship-to-Party / manufacturer delivery after Pak Suzuki approve, **Admin** us
 
 | Method | Path | Use |
 |--------|------|-----|
-| GET | `/api/orders` | List (scoped by role) |
-| GET | `/api/orders/{orderId}` | Detail + lines + remarks + status |
+| GET | `/api/orders` | List (scoped by role). Each row includes `totalLiters`. |
+| GET | `/api/orders/{orderId}` | Detail + lines + remarks + status. Also `totalLiters` and `items[].lineLiters`. |
 
 List query examples:
 - `GET /api/orders?pageNumber=1&pageSize=20`

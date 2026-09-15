@@ -108,7 +108,8 @@ public record NearestDistributorDto(
     string BusinessAddress, double Latitude, double Longitude, double DistanceKm, int Rank);
 
 public record GetNearestDistributorsQuery(
-    double Latitude, double Longitude, Guid? RegionId = null, int Take = 5
+    double Latitude, double Longitude, Guid? RegionId = null, int Take = 5,
+    Guid? ExcludeDistributorId = null
 ) : IRequest<IReadOnlyList<NearestDistributorDto>>;
 
 public class GetNearestDistributorsQueryHandler : IRequestHandler<GetNearestDistributorsQuery, IReadOnlyList<NearestDistributorDto>>
@@ -123,7 +124,8 @@ public class GetNearestDistributorsQueryHandler : IRequestHandler<GetNearestDist
         var distributors = await _context.Distributors
             .Where(d => d.ApprovalStatus == ApprovalStatus.Approved && d.IsActive)
             .Where(d => request.RegionId == null || d.RegionId == request.RegionId)
-                .Where(d => d.Latitude != 0 || d.Longitude != 0)
+            .Where(d => request.ExcludeDistributorId == null || d.Id != request.ExcludeDistributorId)
+            .Where(d => d.Latitude != 0 || d.Longitude != 0)
             .Select(d => new
             {
                 d.Id, d.DistributorCode, d.Name, d.BusinessName, RegionName = d.Region.Name,

@@ -28,10 +28,22 @@ public class MasterCatalogController : BaseApiController
     public async Task<IActionResult> List(
         [FromQuery] string? search,
         [FromQuery] Guid? categoryId,
+        [FromQuery] Guid? productTypeId,
+        [FromQuery] Guid? pTypeId,
+        [FromQuery] string? sourceCode,
+        [FromQuery] string? supplierCode,
         [FromQuery] int pageNumber = 1,
         [FromQuery] int pageSize = 50) =>
         Ok(await Mediator.Send(new GetMasterProductsQuery(
-            _currentUser.Role ?? string.Empty, search, categoryId, pageNumber, pageSize)));
+            _currentUser.Role ?? string.Empty,
+            search,
+            categoryId,
+            productTypeId,
+            pTypeId,
+            sourceCode,
+            supplierCode,
+            pageNumber,
+            pageSize)));
 
     [HttpGet("products/{id:guid}")]
     public async Task<IActionResult> GetById(Guid id) =>
@@ -43,6 +55,37 @@ public class MasterCatalogController : BaseApiController
     {
         var id = await Mediator.Send(new UpsertMasterProductCommand(null, request));
         return CreatedAtAction(nameof(GetById), new { id }, new { id });
+    }
+
+    [HttpGet("products/bulk-template")]
+    [Authorize(Policy = "AdminOrAbove")]
+    public IActionResult DownloadLubricantBulkTemplate(
+        [FromServices] PakSuzuki.Application.Common.Interfaces.ILubricantProductBulkExcelService excel)
+    {
+        var bytes = excel.BuildSampleTemplate();
+        var fileName = $"PSMC_Lubricants_Chemicals_Bulk_Upload_{DateTime.UtcNow:yyyyMMdd}.xlsx";
+        return File(
+            bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            fileName);
+    }
+
+    [HttpPost("products/bulk-upload")]
+    [Authorize(Policy = "AdminOrAbove")]
+    [RequestSizeLimit(30_000_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 30_000_000)]
+    public async Task<IActionResult> BulkUploadLubricants(IFormFile? file)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { title = "Please choose an .xlsx file." });
+
+        var ext = Path.GetExtension(file.FileName);
+        if (!string.Equals(ext, ".xlsx", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { title = "Only .xlsx Excel files are accepted." });
+
+        await using var stream = file.OpenReadStream();
+        var result = await Mediator.Send(new BulkImportLubricantProductsCommand(stream));
+        return Ok(result);
     }
 
     [HttpPut("products/{id:guid}")]

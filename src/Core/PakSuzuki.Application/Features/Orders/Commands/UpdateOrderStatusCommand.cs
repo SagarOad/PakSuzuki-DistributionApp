@@ -51,11 +51,8 @@ public class UpdateOrderStatusCommandHandler : IRequestHandler<UpdateOrderStatus
         var isDeliveryAdvance = request.Status is OrderStatus.PartiallyDelivered or OrderStatus.Delivered;
         var pakSuzukiDelivers = OrderFulfillmentRules.PakSuzukiDelivers(order);
 
-        if (request.Status == OrderStatus.PartiallyDelivered && !OrderFulfillmentRules.AllowsPartialDelivery(order))
-            throw new ConflictException(
-                pakSuzukiDelivers
-                    ? "Partial delivery applies to Parts orders to Pak Suzuki only — lubricant orders must be delivered in full."
-                    : "Partial delivery is not allowed between retailer and distributor — deliver the full order.");
+        // PartiallyDelivered = "In Process" / delivery started for all channels (lubes + parts).
+        // AllowsPartialDelivery only gates true partial *quantity* fulfillment (SAP), not this step.
 
         if (role == Roles.Distributor)
         {

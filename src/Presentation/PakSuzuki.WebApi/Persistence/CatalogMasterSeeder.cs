@@ -58,11 +58,24 @@ public static class CatalogMasterSeeder
         var partsType = await UpsertTypeAsync(context, "Parts", "Parts", false,
             "Parts master fields are pending. Add a Parts category profile once the client shares that data.", 1);
 
-        var sources = lookups.Sources.Count > 0 ? lookups.Sources : ["Local", "C.K.D."];
+        var sources = lookups.Sources.Count > 0 ? lookups.Sources : ["Local", "C.K.D.", "In house"];
+        // Always ensure In house exists even if an older seed file omitted it.
+        if (!sources.Any(s => s.Equals("In house", StringComparison.OrdinalIgnoreCase)))
+            sources = [.. sources, "In house"];
         var sourceOrder = 0;
         foreach (var source in sources)
-            await UpsertSourceAsync(context, source, source, sourceOrder++);
-
+        {
+            var isInHouse = source.Equals("In house", StringComparison.OrdinalIgnoreCase);
+            await UpsertSourceAsync(
+                context,
+                source,
+                source,
+                sourceOrder++,
+                ready: !isInHouse,
+                notReadyMessage: isInHouse
+                    ? "In house catalog data is still awaited from the client (same as Parts). Ordering and product entry unlock once that list is shared."
+                    : null);
+        }
         var supplierOrder = 0;
         foreach (var supplier in lookups.SupplierCodes)
             await UpsertSupplierAsync(context, supplier.Code, supplier.Name, supplierOrder++);
@@ -298,15 +311,27 @@ public static class CatalogMasterSeeder
             context.CatalogPTypes.Add(existing);
         }
 
+        // Ensure In house is allowed on every PType delivery lane.
+        var scopes = row.SourceScope
+            .Concat(["In house"])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         existing.DeliveryType = row.DeliveryType;
         existing.SgoFlag = row.SgoFlag;
-        existing.SourceScopeJson = JsonSerializer.Serialize(row.SourceScope);
+        existing.SourceScopeJson = JsonSerializer.Serialize(scopes);
         existing.CategoryId = categoryId;
         existing.SortOrder = order;
         existing.IsActive = true;
     }
 
-    private static async Task UpsertSourceAsync(ApplicationDbContext context, string code, string name, int order)
+    private static async Task UpsertSourceAsync(
+        ApplicationDbContext context,
+        string code,
+        string name,
+        int order,
+        bool ready = true,
+        string? notReadyMessage = null)
     {
         var row = await context.CatalogSources.FirstOrDefaultAsync(s => s.Code == code);
         if (row is null)
@@ -317,6 +342,8 @@ public static class CatalogMasterSeeder
 
         row.Name = name;
         row.SortOrder = order;
+        row.IsReady = ready;
+        row.NotReadyMessage = ready ? null : notReadyMessage;
         row.IsActive = true;
     }
 

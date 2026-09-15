@@ -42,7 +42,7 @@ public class CreateOrderCommandValidator : AbstractValidator<CreateOrderCommand>
         RuleFor(x => x.MaterialSourceCode).NotEmpty()
             .When(x => x.Source == OrderSourceType.DistributorDirectOrder
                 || HasLane(x.MaterialSourceCode, x.DeliveryTypeCode, x.SupplierCode))
-            .WithMessage("Select Local or C.K.D. before placing the order.");
+            .WithMessage("Select a source (Local, C.K.D., or In house) before placing the order.");
         RuleFor(x => x.DeliveryTypeCode).NotEmpty()
             .When(x => x.Source == OrderSourceType.DistributorDirectOrder
                 || HasLane(x.MaterialSourceCode, x.DeliveryTypeCode, x.SupplierCode))
@@ -187,6 +187,20 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Cre
                 laneDelivery = firstProfile.PType.Code;
                 laneDeliveryName = firstProfile.PType.DeliveryType;
                 laneSupplier = firstProfile.SupplierCode;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(laneSource))
+        {
+            var sources = await _context.CatalogSources.AsNoTracking()
+                .Where(s => s.IsActive)
+                .ToListAsync(ct);
+            var sourceRow = sources.FirstOrDefault(s => OrderLaneCodes.SameSource(s.Code, laneSource));
+            if (sourceRow is { IsReady: false })
+            {
+                throw new ConflictException(
+                    sourceRow.NotReadyMessage
+                    ?? $"Source '{laneSource}' is not ready yet. Catalog data is still awaited.");
             }
         }
 

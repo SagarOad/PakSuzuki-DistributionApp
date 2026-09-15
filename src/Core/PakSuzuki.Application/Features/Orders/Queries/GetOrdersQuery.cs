@@ -27,7 +27,8 @@ public record OrderListDto(
     bool ThresholdReached, string ShippedBy,
     string? ProductSummary, string? CategorySummary, string? PacksSummary, decimal TotalUnits,
     string? DistributorRemarks, string? RetailerRemarks, string? PakSuzukiRemarks,
-    string StatusColor, string? SapInvoiceNumber, string? MiddlewareStatus, string? SapMessage);
+    string StatusColor, string? SapInvoiceNumber, string? MiddlewareStatus, string? SapMessage,
+    decimal TotalLiters = 0);
 
 public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedList<OrderListDto>>
 {
@@ -78,7 +79,7 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
             .AsNoTracking()
             .Include(o => o.Retailer)
             .Include(o => o.Distributor)
-            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .Include(o => o.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.CatalogProfile)
             .Where(o => pageIds.Contains(o.Id))
             .ToListAsync(ct);
 
@@ -142,7 +143,8 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
                     SapOrderDisplay.StatusColor(o.Status, invoice, o.SapDeliveryNumber, sap?.SapMessage, sap?.SapTransferStatus),
                     retailerViewer ? null : invoice,
                     retailerViewer ? null : sap?.MiddlewareStatus,
-                    retailerViewer ? null : sap?.SapMessage
+                    retailerViewer ? null : sap?.SapMessage,
+                    OrderLiterTotals.ForItems(o.Items)
                 );
             })
             .ToList();

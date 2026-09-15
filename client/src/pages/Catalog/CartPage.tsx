@@ -1,9 +1,10 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { Minus, Plus, Trash2 } from 'lucide-react'
-import { useCart } from '@/context/CartContext'
+import { useCart, useHydrateCartPackMeta } from '@/context/CartContext'
 import { useOrderTaxEstimate } from '@/hooks/useOrderTaxEstimate'
 import { ProductTitle } from './catalogTypes'
 import PlaceholderImage from '@/components/ui/PlaceholderImage'
+import { cartLineLiters, cartTotalLiters } from '@/pages/Orders/orderTypes'
 
 function formatRs(n: number) {
   return `Rs.${Number(n || 0).toLocaleString('en-PK')}`
@@ -16,9 +17,11 @@ function formatCartDate(d = new Date()) {
 
 export default function CartPage() {
   const { items, itemCount, setQuantity, removeItem, originatingRetailerOrderId } = useCart()
+  useHydrateCartPackMeta()
   const { subTotal, gstPercent, gstAmount, fedAmount, whtPercent, whtAmount, estimatedTotal } =
     useOrderTaxEstimate(items)
   const navigate = useNavigate()
+  const totalLiters = cartTotalLiters(items)
 
   if (items.length === 0) {
     return (
@@ -90,6 +93,12 @@ export default function CartPage() {
                       Selected Pack:{' '}
                       <span className="text-suzuki-red">{item.packLabel}</span>
                     </p>
+                    {cartLineLiters(item) != null && (
+                      <p className="text-sm font-bold text-suzuki-navy">
+                        Liters:{' '}
+                        <span className="text-suzuki-red">{cartLineLiters(item)} L</span>
+                      </p>
+                    )}
 
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-bold text-suzuki-navy">Unit</span>
@@ -135,6 +144,12 @@ export default function CartPage() {
 
         <div className="px-5 sm:px-6 py-5 border-t border-suzuki-line flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1 text-sm min-w-[240px]">
+            {totalLiters != null && (
+              <p className="font-bold text-suzuki-navy flex justify-between gap-6">
+                <span>Total liters</span>
+                <span className="text-suzuki-red">{totalLiters.toLocaleString('en-PK')} L</span>
+              </p>
+            )}
             <p className="font-bold text-suzuki-navy flex justify-between gap-6">
               <span>Subtotal</span>
               <span className="text-suzuki-red">{formatRs(subTotal)}</span>

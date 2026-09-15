@@ -61,6 +61,7 @@ public class CatalogSourceConfiguration : IEntityTypeConfiguration<CatalogSource
         builder.HasIndex(x => x.Code).IsUnique();
         builder.Property(x => x.Code).HasMaxLength(20).IsRequired();
         builder.Property(x => x.Name).HasMaxLength(40).IsRequired();
+        builder.Property(x => x.NotReadyMessage).HasMaxLength(400);
     }
 }
 

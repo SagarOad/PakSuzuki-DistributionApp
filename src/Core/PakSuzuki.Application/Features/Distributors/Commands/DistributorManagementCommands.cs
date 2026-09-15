@@ -179,8 +179,21 @@ public class SoftDeleteDistributorCommandHandler : IRequestHandler<SoftDeleteDis
 
     public async Task Handle(SoftDeleteDistributorCommand request, CancellationToken ct)
     {
-        var distributor = await _context.Distributors.FirstOrDefaultAsync(d => d.Id == request.Id, ct)
+        var distributor = await _context.Distributors
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(d => d.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(Domain.Entities.Distributor), request.Id);
+
+        if (distributor.IsDeleted)
+            throw new ConflictException("This distributor is already removed.");
+
+        // Soft-deleted retailers still hold DistributorId — they must be moved first too.
+        var retailerCount = await _context.Retailers
+            .IgnoreQueryFilters()
+            .CountAsync(r => r.DistributorId == request.Id, ct);
+        if (retailerCount > 0)
+            throw new ConflictException(
+                $"This distributor has {retailerCount} retailer link(s). Reassign every retailer to a live distributor before deleting.");
 
         distributor.IsActive = false;
         distributor.IsDeleted = true;

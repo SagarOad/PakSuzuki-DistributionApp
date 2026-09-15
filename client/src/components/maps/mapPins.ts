@@ -1,7 +1,7 @@
 import L from 'leaflet'
 
-/** Distributor pins = Suzuki red; retailer pins = blue. */
-export function createMapPinIcon(color: '#E30613' | '#2563EB') {
+/** Distributor pins = Suzuki red; retailer pins = blue; optional muted for “removing”. */
+export function createMapPinIcon(color: string) {
   return L.divIcon({
     className: '',
     html: `<div style="width:28px;height:28px;margin-left:-14px;margin-top:-28px;">
@@ -19,3 +19,5 @@ export function createMapPinIcon(color: '#E30613' | '#2563EB') {
 
 export const distributorPinIcon = createMapPinIcon('#E30613')
 export const retailerPinIcon = createMapPinIcon('#2563EB')
+export const removingDistributorPinIcon = createMapPinIcon('#94A3B8')
+export const assignedDistributorPinIcon = createMapPinIcon('#059669')

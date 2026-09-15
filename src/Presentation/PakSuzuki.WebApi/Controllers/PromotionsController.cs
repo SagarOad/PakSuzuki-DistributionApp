@@ -60,7 +60,7 @@ public class PromotionsController : BaseApiController
 public class UpsertPromotionForm
 {
     public string Title { get; set; } = string.Empty;
-    public string Type { get; set; } = "PromotionBanner";
+    public string Type { get; set; } = "LoginPopup";
     public string? RedirectUrl { get; set; }
     public string TargetRoles { get; set; } = "Distributor,Retailer";
     public bool IsActive { get; set; } = true;

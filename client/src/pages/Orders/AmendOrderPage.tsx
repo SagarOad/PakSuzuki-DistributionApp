@@ -5,12 +5,15 @@ import { AlertTriangle, FileSpreadsheet, ImageIcon, Minus, Plus, Trash2 } from '
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
 import { downloadExcel } from '@/utils/excelExport'
+import { RejectOrderModal } from '@/components/ui/RejectOrderModal'
 import {
   type OrderDetail,
   type OrderLineItem,
   formatOrderDate,
   formatRs,
   locationLine,
+  orderTotalLiters,
+  resolveShipToDelivery,
   toUiStatus
 } from './orderTypes'
 
@@ -32,6 +35,9 @@ interface AmendLine {
   lineGst: number
   lineFed: number
   lineSubTotal: number
+  packQuantity?: number | null
+  unitValue?: number | null
+  unitType?: string | null
 }
 
 function toAmendLine(item: OrderLineItem): AmendLine {
@@ -52,7 +58,10 @@ function toAmendLine(item: OrderLineItem): AmendLine {
     removed: false,
     lineGst: item.lineGst,
     lineFed: item.lineFed,
-    lineSubTotal: item.lineSubTotal
+    lineSubTotal: item.lineSubTotal,
+    packQuantity: item.packQuantity,
+    unitValue: item.unitValue,
+    unitType: item.unitType
   }
 }
 
@@ -68,6 +77,9 @@ export default function AmendOrderPage() {
   const [lines, setLines] = useState<AmendLine[]>([])
   const [hydrated, setHydrated] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rejectModalOpen, setRejectModalOpen] = useState(false)
+  const [rejectNote, setRejectNote] = useState('')
+  const [rejectKind, setRejectKind] = useState<'distributor' | 'staff'>('distributor')
 
   const isStaff = role === 'SuperAdmin' || role === 'Admin'
   const isDistributor = role === 'Distributor'
@@ -117,7 +129,15 @@ export default function AmendOrderPage() {
         }, 0) * 100) / 100
       : 0
     const total = Math.round((subtotal + (subtotal * gstPercent) / 100 + fed + wht) * 100) / 100
-    return { subtotal, gstPercent, gst, fed, whtPercent, wht, total }
+    const liters = orderTotalLiters(
+      visibleLines.map((l) => ({
+        requestedQuantity: l.quantity,
+        packQuantity: l.packQuantity,
+        unitValue: l.unitValue,
+        unitType: l.unitType
+      }))
+    )
+    return { subtotal, gstPercent, gst, fed, whtPercent, wht, total, liters }
   }, [visibleLines, order?.gstPercent, order?.whtPercent, order])
 
   const amendedItems = () =>
@@ -127,21 +147,27 @@ export default function AmendOrderPage() {
     }))
 
   const distAction = useMutation({
-    mutationFn: async (decision: DistDecision) => {
+    mutationFn: async ({
+      decision,
+      remarks
+    }: {
+      decision: DistDecision
+      remarks?: string | null
+    }) => {
       const isManufacturerResubmit = decision === 'ForwardedToPakSuzuki'
       await api.post(`/orders/distributor-action/${id}`, {
         decision,
-        remarks: note || null,
+        remarks: remarks !== undefined ? (remarks || null) : (note || null),
         amendedItems:
           decision === 'SentBackForModification' || isManufacturerResubmit ? amendedItems() : null,
         fulfillmentChoice: isManufacturerResubmit ? 'PassToPakSuzuki' : null,
         pakSuzukiShipTo: null
       })
     },
-    onSuccess: async (_data, decision) => {
+    onSuccess: async (_data, vars) => {
       await qc.invalidateQueries({ queryKey: ['order-detail', id] })
       await qc.invalidateQueries({ queryKey: ['orders-distributor-all'] })
-      navigate(decision === 'ForwardedToPakSuzuki' ? '/orders?section=manufacture' : '/orders?section=retailer')
+      navigate(vars.decision === 'ForwardedToPakSuzuki' ? '/orders?section=manufacture' : '/orders?section=retailer')
     },
     onError: (e: unknown) => {
       setError(extractError(e) || 'Could not update order.')
@@ -149,10 +175,16 @@ export default function AmendOrderPage() {
   })
 
   const staffAction = useMutation({
-    mutationFn: async (decision: StaffDecision) => {
+    mutationFn: async ({
+      decision,
+      remarks
+    }: {
+      decision: StaffDecision
+      remarks?: string | null
+    }) => {
       await api.post(`/orders/paksuzuki-action/${id}`, {
         decision,
-        remarks: note || null,
+        remarks: remarks !== undefined ? (remarks || null) : (note || null),
         amendedItems:
           decision === 'Cancelled' ? null : amendedItems()
       })
@@ -166,6 +198,29 @@ export default function AmendOrderPage() {
       setError(extractError(e) || 'Could not update order.')
     }
   })
+
+  const openRejectModal = (kind: 'distributor' | 'staff') => {
+    setRejectKind(kind)
+    setRejectNote(note)
+    setRejectModalOpen(true)
+  }
+
+  const confirmRejectFromModal = () => {
+    const remarks = rejectNote.trim() || null
+    setNote(rejectNote)
+    setError(null)
+    if (rejectKind === 'staff') {
+      staffAction.mutate(
+        { decision: 'Cancelled', remarks },
+        { onSuccess: () => setRejectModalOpen(false) }
+      )
+      return
+    }
+    distAction.mutate(
+      { decision: 'RejectedByDistributor', remarks },
+      { onSuccess: () => setRejectModalOpen(false) }
+    )
+  }
 
   const actionPending = distAction.isPending || staffAction.isPending
 
@@ -293,11 +348,28 @@ export default function AmendOrderPage() {
             <Field label="Date" value={formatOrderDate(order.createdAtUtc)} />
             <Field label="Distributor" value={order.distributorName || '—'} />
             <Field label="Retailer" value={order.retailerName || '—'} />
-            <Field
-              label="Location"
-              value={locationLine(order.regionName, order.retailerAddress || order.distributorAddress)}
-              className="col-span-2"
-            />
+            {(() => {
+              const shipTo = resolveShipToDelivery(order)
+              return (
+                <>
+                  <Field
+                    label={`Ship-to (${shipTo.partyKind})`}
+                    value={shipTo.name}
+                  />
+                  <Field label="Ship-to contact" value={shipTo.mobile} />
+                  <Field
+                    label="Ship-to address"
+                    value={shipTo.address || '—'}
+                    className="col-span-2"
+                  />
+                  <Field
+                    label="Location"
+                    value={locationLine(shipTo.regionName, shipTo.address)}
+                    className="col-span-2"
+                  />
+                </>
+              )
+            })()}
           </div>
         </section>
 
@@ -371,6 +443,12 @@ export default function AmendOrderPage() {
           </div>
 
           <div className="border-t border-suzuki-line pt-3 text-sm space-y-1">
+            {totals.liters != null && (
+              <div className="flex justify-between">
+                <span className="text-suzuki-mute">Total liters</span>
+                <span className="font-semibold">{totals.liters.toLocaleString('en-PK')} L</span>
+              </div>
+            )}
             <div className="flex justify-between"><span className="text-suzuki-mute">Subtotal</span><span className="font-semibold">{formatRs(totals.subtotal)}</span></div>
             <div className="flex justify-between"><span className="text-suzuki-mute">GST ({totals.gstPercent}%)</span><span className="font-semibold">{formatRs(totals.gst)}</span></div>
             <div className="flex justify-between font-extrabold text-suzuki-navy"><span>Total</span><span>{formatRs(totals.total)}</span></div>
@@ -412,7 +490,7 @@ export default function AmendOrderPage() {
                     onClick={() => {
                       if (!window.confirm('Approve these quantities and send back to Pak Suzuki?')) return
                       setError(null)
-                      distAction.mutate('ForwardedToPakSuzuki')
+                      distAction.mutate({ decision: 'ForwardedToPakSuzuki' })
                     }}
                     className="rounded-xl bg-suzuki-red text-white font-extrabold px-6 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
                   >
@@ -423,20 +501,16 @@ export default function AmendOrderPage() {
             ) : (
               <>
                 <p className="text-xs text-suzuki-mute">
-                  Change pack quantities and send the order back so the retailer can update it. Reject also sends the order back for modification.
+                  Change pack quantities and send the order back so the retailer can update it. Reject closes the order permanently (no amendment).
                 </p>
                 <div className="flex flex-col sm:flex-row flex-wrap justify-end gap-3">
                   <button
                     type="button"
                     disabled={actionPending}
-                    onClick={() => {
-                      if (!window.confirm('Reject this order and send it back to the retailer?')) return
-                      setError(null)
-                      distAction.mutate('RejectedByDistributor')
-                    }}
+                    onClick={() => openRejectModal('distributor')}
                     className="rounded-xl bg-sky-100 text-suzuki-navy font-extrabold px-6 py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
                   >
-                    REJECT / SEND BACK
+                    REJECT
                   </button>
                   <button
                     type="button"
@@ -444,7 +518,7 @@ export default function AmendOrderPage() {
                     onClick={() => {
                       if (!window.confirm('Send amended quantities back to the retailer?')) return
                       setError(null)
-                      distAction.mutate('SentBackForModification')
+                      distAction.mutate({ decision: 'SentBackForModification' })
                     }}
                     className="rounded-xl bg-suzuki-red text-white font-extrabold px-6 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
                   >
@@ -462,11 +536,7 @@ export default function AmendOrderPage() {
                 <button
                   type="button"
                   disabled={actionPending}
-                  onClick={() => {
-                    if (!window.confirm('Cancel / reject this manufacturer order?')) return
-                    setError(null)
-                    staffAction.mutate('Cancelled')
-                  }}
+                  onClick={() => openRejectModal('staff')}
                   className="rounded-xl bg-sky-100 text-suzuki-navy font-extrabold px-6 py-3 tracking-wide hover:bg-sky-200 disabled:opacity-50"
                 >
                   CANCEL ORDER
@@ -477,7 +547,7 @@ export default function AmendOrderPage() {
                   onClick={() => {
                     if (!window.confirm('Send amended quantities to the distributor for approval?')) return
                     setError(null)
-                    staffAction.mutate('PendingDistributorApproval')
+                    staffAction.mutate({ decision: 'PendingDistributorApproval' })
                   }}
                   className="rounded-xl bg-suzuki-red text-white font-extrabold px-6 py-3 tracking-wide hover:bg-red-700 disabled:opacity-50"
                 >
@@ -488,6 +558,23 @@ export default function AmendOrderPage() {
           )}
         </div>
       </section>
+
+      {rejectModalOpen && (
+        <RejectOrderModal
+          title={rejectKind === 'staff' ? 'Cancel order' : 'Reject order'}
+          description={
+            rejectKind === 'staff'
+              ? 'Cancel / reject this manufacturer order. You can leave an optional note for the distributor.'
+              : 'Reject this order permanently. The retailer cannot amend or resubmit it. You can leave an optional note.'
+          }
+          confirmLabel={rejectKind === 'staff' ? 'Cancel order' : 'Reject order'}
+          note={rejectNote}
+          busy={actionPending}
+          onNoteChange={setRejectNote}
+          onBack={() => setRejectModalOpen(false)}
+          onConfirm={confirmRejectFromModal}
+        />
+      )}
     </div>
   )
 }

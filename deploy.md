@@ -24,7 +24,9 @@ npm run dev
 
 ```bash
 # 1. Build the React app straight into the API's wwwroot (vite.config.ts outDir is
-#    already set to ../src/Presentation/PakSuzuki.WebApi/wwwroot)
+#    already set to ../src/Presentation/PakSuzuki.WebApi/wwwroot).
+#    Uploaded images are NOT in wwwroot — they live in App_Data/uploads — so this
+#    build will not delete banners, popups, shop photos, or registration images.
 cd client
 npm install
 npm run build
@@ -53,9 +55,13 @@ contact, or zip it for a VPS deploy.
      `CREATE DATABASE [distribution];`
      Then grant the IIS app-pool Windows login access to that DB (`db_owner`).
    - Set a real `Jwt:Secret` (32+ random characters).
-5. Give the app-pool identity **Modify** rights on the site folder (for `logs\` and `email-outbox\`).
+5. Give the app-pool identity **Modify** rights on the site folder (for `logs\`, `email-outbox\`, and `App_Data\uploads\`).
 6. If you still get **500.30**, open `logs\stdout_*.log` under the site (stdout logging is enabled in `web.config`).
 7. Hit `https://<their-server>/swagger` then `https://<their-server>/`.
+
+**Uploads:** User media is stored under `App_Data/uploads` and served at `/uploads/...`.
+Keep that folder when redeploying (or copy it into the new publish folder). Do not
+point uploads at `wwwroot` — frontend builds empty wwwroot and would wipe them.
 
 ## Why this holds up
 

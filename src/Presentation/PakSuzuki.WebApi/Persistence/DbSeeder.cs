@@ -46,6 +46,7 @@ public static class DbSeeder
         // makes /api/orders and /api/products return HTTP 500.
         await EnsureProfileImageColumnsAsync(context);
         await EnsureShopAndOrderSchemaAsync(context);
+        await EnsureRegionalHeadAssignmentTableAsync(context);
 
         foreach (var role in Roles.All)
         {
@@ -68,6 +69,85 @@ public static class DbSeeder
             if (result.Succeeded)
                 await userManager.AddToRoleAsync(user, Roles.SuperAdmin);
         }
+
+        await SeedRegionalHeadAsync(userManager, context);
+    }
+
+    /// <summary>
+    /// View-only Regional Head login for dashboards / map / regional stats.
+    /// Email: regionalhead@paksuzuki.local  Password: ChangeMe!2026
+    /// </summary>
+    private static async Task SeedRegionalHeadAsync(
+        UserManager<ApplicationUser> userManager,
+        ApplicationDbContext context)
+    {
+        const string email = "regionalhead@paksuzuki.local";
+        var user = await userManager.FindByNameAsync(email);
+        if (user is null)
+        {
+            user = new ApplicationUser
+            {
+                UserName = email,
+                Email = email,
+                EmailConfirmed = true,
+                IsActive = true
+            };
+            var result = await userManager.CreateAsync(user, "ChangeMe!2026");
+            if (!result.Succeeded) return;
+        }
+
+        if (!await userManager.IsInRoleAsync(user, Roles.RegionalHead))
+            await userManager.AddToRoleAsync(user, Roles.RegionalHead);
+
+        var regionIds = new[]
+        {
+            RegionKarachiId, RegionLahoreId, RegionIslamabadId, RegionMultanId,
+            RegionFaisalabadId, RegionPeshawarId, RegionQuettaId
+        };
+
+        foreach (var regionId in regionIds)
+        {
+            var exists = await context.RegionalHeadAssignments
+                .AnyAsync(a => a.ApplicationUserId == user.Id && a.RegionId == regionId);
+            if (exists) continue;
+
+            // Skip if region row missing (should be seeded already).
+            if (!await context.Regions.AnyAsync(r => r.Id == regionId)) continue;
+
+            context.RegionalHeadAssignments.Add(new RegionalHeadAssignment
+            {
+                ApplicationUserId = user.Id,
+                RegionId = regionId
+            });
+        }
+
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task EnsureRegionalHeadAssignmentTableAsync(ApplicationDbContext context)
+    {
+        await context.Database.ExecuteSqlRawAsync("""
+            IF OBJECT_ID(N'[RegionalHeadAssignment]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [RegionalHeadAssignment] (
+                    [Id] uniqueidentifier NOT NULL,
+                    [ApplicationUserId] uniqueidentifier NOT NULL,
+                    [RegionId] uniqueidentifier NOT NULL,
+                    [CreatedAtUtc] datetime2 NOT NULL,
+                    [CreatedBy] nvarchar(max) NULL,
+                    [ModifiedAtUtc] datetime2 NULL,
+                    [ModifiedBy] nvarchar(max) NULL,
+                    [IsDeleted] bit NOT NULL CONSTRAINT [DF_RegionalHeadAssignment_IsDeleted] DEFAULT (0),
+                    [DeletedAtUtc] datetime2 NULL,
+                    [DeletedBy] nvarchar(max) NULL,
+                    CONSTRAINT [PK_RegionalHeadAssignment] PRIMARY KEY ([Id]),
+                    CONSTRAINT [FK_RegionalHeadAssignment_Regions_RegionId]
+                        FOREIGN KEY ([RegionId]) REFERENCES [Regions]([Id]) ON DELETE CASCADE
+                );
+                CREATE INDEX [IX_RegionalHeadAssignment_RegionId]
+                    ON [RegionalHeadAssignment]([RegionId]);
+            END
+            """);
     }
 
     private static async Task EnsureProfileImageColumnsAsync(ApplicationDbContext context)
@@ -110,6 +190,19 @@ public static class DbSeeder
                 ALTER TABLE [Orders] ADD [DeliveryTypeName] nvarchar(80) NULL;
             IF COL_LENGTH('Orders', 'SupplierCode') IS NULL
                 ALTER TABLE [Orders] ADD [SupplierCode] nvarchar(20) NULL;
+
+            IF COL_LENGTH('CatalogSources', 'IsReady') IS NULL
+                ALTER TABLE [CatalogSources] ADD [IsReady] bit NOT NULL CONSTRAINT [DF_CatalogSources_IsReady] DEFAULT (1);
+            IF COL_LENGTH('CatalogSources', 'NotReadyMessage') IS NULL
+                ALTER TABLE [CatalogSources] ADD [NotReadyMessage] nvarchar(400) NULL;
+
+            -- One login-popup type: merge legacy newsletter / promotion banner rows.
+            IF OBJECT_ID(N'[Promotions]', N'U') IS NOT NULL
+            BEGIN
+                UPDATE [Promotions]
+                SET [Type] = N'LoginPopup'
+                WHERE [Type] IN (N'NewsletterPopUp', N'PromotionBanner', N'PromoPopup');
+            END
 
             IF OBJECT_ID(N'[ProductVariants]', N'U') IS NULL
             BEGIN

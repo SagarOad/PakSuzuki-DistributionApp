@@ -21,7 +21,7 @@ public class Distributor : EntityWithDomainEvents
     public double Latitude { get; set; }
     public double Longitude { get; set; }
 
-    /// <summary>Optional profile / avatar photo URL (stored under wwwroot/uploads).</summary>
+    /// <summary>Optional profile / avatar photo URL (stored under App_Data/uploads).</summary>
     public string? ProfileImageUrl { get; set; }
 
     public Guid RegionId { get; set; }

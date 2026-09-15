@@ -74,11 +74,6 @@ const PENDING = ['PendingDistributorApproval', 'PendingPakSuzukiApproval', 'Sent
 const COMPLETED = COMPLETED_STATUSES
 const CANCELED = CANCELED_STATUSES
 
-function countStatuses(rows: { status: string; count: number }[] | undefined, names: string[]) {
-  if (!rows) return 0
-  return rows.filter((r) => names.includes(r.status)).reduce((s, r) => s + r.count, 0)
-}
-
 function isRetailerSource(source: string) {
   return source === 'RetailerOrder' || source === '0'
 }
@@ -644,8 +639,11 @@ function ProfileLine({ label, value }: { label: string; value?: string | null })
 }
 
 function StaffOrdersExperience() {
+  const { role } = useAuth()
   const navigate = useNavigate()
+  const isViewOnly = role === 'RegionalHead'
   const [period, setPeriod] = useState<'Month' | 'Week' | 'Year'>('Month')
+  const [section, setSection] = useState<OrderSection>('retailer')
   const [tab, setTab] = useState<StatusTab>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -654,9 +652,21 @@ function StaffOrdersExperience() {
   const [exporting, setExporting] = useState(false)
 
   const dashQuery = useQuery({
-    queryKey: ['dashboard-superadmin'],
+    queryKey: ['dashboard-orders-staff', role],
+    enabled: !isViewOnly,
     queryFn: async () => (await api.get<Dash>('/dashboards/superadmin')).data
   })
+
+  const regionalDashQuery = useQuery({
+    queryKey: ['dashboard-orders-regional'],
+    enabled: isViewOnly,
+    queryFn: async () =>
+      (await api.get<{ totalOrders: number; ordersByStatus: { status: string; count: number }[] }>(
+        '/dashboards/regional-head'
+      )).data
+  })
+
+  const boardDash = isViewOnly ? regionalDashQuery.data : dashQuery.data
 
   const ordersQuery = useQuery({
     queryKey: ['orders-page', page, search],
@@ -666,21 +676,29 @@ function StaffOrdersExperience() {
       })).data
   })
 
-  const inProcess = countStatuses(dashQuery.data?.ordersByStatus, PROCESS)
-  const completed = countStatuses(dashQuery.data?.ordersByStatus, COMPLETED)
-  const canceled = countStatuses(dashQuery.data?.ordersByStatus, CANCELED)
+  const staffItems = ordersQuery.data?.items ?? []
+  const retailerItems = staffItems.filter((o) => isRetailerSource(o.source))
+  const manufactureItems = staffItems.filter((o) => isManufactureSource(o.source))
+  const sectionItems = section === 'retailer' ? retailerItems : manufactureItems
+
+  const inProcess = sectionItems.filter((o) => PROCESS.includes(o.status) || PENDING.includes(o.status)).length
+  const completed = sectionItems.filter((o) => COMPLETED.includes(o.status)).length
+  const canceled = sectionItems.filter((o) => CANCELED.includes(o.status)).length
+  const pending = sectionItems.filter((o) => PENDING.includes(o.status)).length
+  const thresholdCount = retailerItems.filter((o) => o.thresholdReached).length
 
   function filterStaffOrders(list: OrderRow[]) {
-    let next = list
-    if (tab === 'process') next = next.filter((o) => PROCESS.includes(o.status) || PENDING.includes(o.status))
+    let next = list.filter((o) =>
+      section === 'retailer' ? isRetailerSource(o.source) : isManufactureSource(o.source)
+    )
+    if (tab === 'pending') next = next.filter((o) => PENDING.includes(o.status))
+    if (tab === 'process') {
+      if (section === 'manufacture') next = next.filter((o) => PROCESS.includes(o.status))
+      else next = next.filter((o) => PROCESS.includes(o.status) && !PENDING.includes(o.status))
+    }
     if (tab === 'completed') next = next.filter((o) => COMPLETED.includes(o.status))
     if (tab === 'canceled') next = next.filter((o) => CANCELED.includes(o.status))
-    if (tab === 'threshold') {
-      next = next.filter((o) => o.thresholdReached || (isRetailerSource(o.source) && o.shippedBy === 'Pak Suzuki'))
-    }
-    if (tab === 'manufacture') {
-      next = next.filter((o) => isManufactureSource(o.source))
-    }
+    if (tab === 'threshold') next = next.filter((o) => o.thresholdReached)
     if (search.trim()) {
       const q = search.toLowerCase()
       next = next.filter(
@@ -696,8 +714,25 @@ function StaffOrdersExperience() {
   const filteredItems = useMemo(
     () => filterStaffOrders(ordersQuery.data?.items ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ordersQuery.data, tab, search, fromDate, toDate]
+    [ordersQuery.data, section, tab, search, fromDate, toDate]
   )
+
+  const statusTabs: { key: StatusTab; label: string }[] =
+    section === 'retailer'
+      ? [
+          { key: 'all', label: 'All' },
+          { key: 'pending', label: 'Pending' },
+          { key: 'process', label: 'In Process' },
+          { key: 'completed', label: 'Completed' },
+          { key: 'canceled', label: 'Canceled' },
+          { key: 'threshold', label: 'Threshold Reached' }
+        ]
+      : [
+          { key: 'all', label: 'All' },
+          { key: 'process', label: 'In Process' },
+          { key: 'completed', label: 'Completed' },
+          { key: 'canceled', label: 'Canceled' }
+        ]
 
   async function exportStaffOrders() {
     setExporting(true)
@@ -705,7 +740,7 @@ function StaffOrdersExperience() {
       const all = await fetchAllFromApi<OrderRow>('/orders', { search: search || undefined })
       const rows = filterStaffOrders(all)
       downloadExcel(
-        `orders-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
+        `orders-${section}-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
         [
           { header: 'Order Date', value: (o) => formatOrderDate(o.createdAtUtc) },
           { header: 'Order Number', value: (o) => o.orderNumber },
@@ -730,20 +765,70 @@ function StaffOrdersExperience() {
     return [12, 18, 15, 28, 22, 32, 30, 38, 34, 40, 36, 42]
   }, [period])
 
-  const staffItems = ordersQuery.data?.items ?? []
-  const total = staffItems.length || dashQuery.data?.totalOrders || '—'
-  const thresholdCount = staffItems.filter((o) => o.thresholdReached).length
-  const manufactureCount = staffItems.filter((o) => isManufactureSource(o.source)).length
+  const changeSection = (next: OrderSection) => {
+    setSection(next)
+    setTab('all')
+    setPage(1)
+  }
 
   return (
     <div className="space-y-5">
+      {isViewOnly && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-suzuki-navy">
+          <span className="font-extrabold">View only. </span>
+          Regional Head can open orders to review them, but cannot approve, amend, or change status.
+        </div>
+      )}
+      <div className="inline-flex rounded-xl bg-suzuki-mist p-1 text-sm font-bold">
+        <button
+          type="button"
+          onClick={() => changeSection('retailer')}
+          className={clsx(
+            'px-4 py-2 rounded-lg transition-colors inline-flex items-center gap-2',
+            section === 'retailer' ? 'bg-white text-suzuki-navy shadow-sm' : 'text-suzuki-mute hover:text-suzuki-ink'
+          )}
+        >
+          <ShoppingBasket size={16} />
+          Retailer Orders
+          <span className="text-xs font-semibold text-suzuki-mute">({retailerItems.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => changeSection('manufacture')}
+          className={clsx(
+            'px-4 py-2 rounded-lg transition-colors inline-flex items-center gap-2',
+            section === 'manufacture' ? 'bg-white text-suzuki-navy shadow-sm' : 'text-suzuki-mute hover:text-suzuki-ink'
+          )}
+        >
+          <Briefcase size={16} />
+          Manufacturer Orders
+          <span className="text-xs font-semibold text-suzuki-mute">({manufactureItems.length})</span>
+        </button>
+      </div>
+
       <StatCardRow>
-        <StatCard tone="order-blue" icon={<ShoppingBasket size={20} />} value={total} label="Pak Suzuki Queue" onClick={() => setTab('all')} />
-        <StatCard tone="order-red" icon={<Clock size={20} />} value={inProcess} label="In Process" onClick={() => setTab('process')} />
-        <StatCard tone="order-green" icon={<CheckCircle2 size={20} />} value={completed} label="Completed" onClick={() => setTab('completed')} />
-        <StatCard tone="order-gray" icon={<XCircle size={20} />} value={canceled} label="Canceled" onClick={() => setTab('canceled')} />
-        <StatCard tone="order-orange" icon={<AlertTriangle size={20} />} value={thresholdCount} label="Ship-to-Party" onClick={() => setTab('threshold')} />
-        <StatCard tone="order-blue" icon={<Briefcase size={20} />} value={manufactureCount} label="Distributor Orders" onClick={() => setTab('manufacture')} />
+        <StatCard
+          tone="order-blue"
+          icon={<ShoppingBasket size={20} />}
+          value={sectionItems.length || boardDash?.totalOrders || '—'}
+          label={section === 'retailer' ? 'Retailer Orders' : 'Manufacturer Orders'}
+          onClick={() => { setTab('all'); setPage(1) }}
+        />
+        {section === 'retailer' && (
+          <StatCard tone="order-red" icon={<Clock size={20} />} value={pending} label="Pending" onClick={() => { setTab('pending'); setPage(1) }} />
+        )}
+        <StatCard tone="order-red" icon={<Clock size={20} />} value={inProcess} label="In Process" onClick={() => { setTab('process'); setPage(1) }} />
+        <StatCard tone="order-green" icon={<CheckCircle2 size={20} />} value={completed} label="Completed" onClick={() => { setTab('completed'); setPage(1) }} />
+        <StatCard tone="order-gray" icon={<XCircle size={20} />} value={canceled} label="Canceled" onClick={() => { setTab('canceled'); setPage(1) }} />
+        {section === 'retailer' && (
+          <StatCard
+            tone="order-orange"
+            icon={<AlertTriangle size={20} />}
+            value={thresholdCount}
+            label="Threshold Reached"
+            onClick={() => { setTab('threshold'); setPage(1) }}
+          />
+        )}
       </StatCardRow>
 
       <StatsGraph
@@ -756,21 +841,12 @@ function StaffOrdersExperience() {
       />
 
       <div className="flex flex-wrap gap-2">
-        {(
-          [
-            ['all', 'All'],
-            ['process', 'In Process'],
-            ['completed', 'Completed'],
-            ['canceled', 'Canceled'],
-            ['threshold', 'Ship-to-Party (Threshold)'],
-            ['manufacture', 'Distributor → Manufacturer']
-          ] as const
-        ).map(([key, label]) => (
+        {statusTabs.map(({ key, label }) => (
           <button
             key={key}
             type="button"
             onClick={() => {
-              setTab(key as StatusTab)
+              setTab(key)
               setPage(1)
             }}
             className={clsx(
@@ -784,7 +860,7 @@ function StaffOrdersExperience() {
       </div>
 
       <OrderTable
-        title="Orders List"
+        title={section === 'retailer' ? 'Retailer Orders' : 'Manufacturer Orders'}
         search={search}
         onSearchChange={(v) => { setSearch(v); setPage(1) }}
         filterBar={
@@ -799,7 +875,11 @@ function StaffOrdersExperience() {
         columns={[
           { key: 'date', header: 'Order Date' },
           { key: 'number', header: 'Order Number' },
-          { key: 'party', header: 'Retailer / Distributor', wide: true },
+          {
+            key: 'party',
+            header: section === 'retailer' ? 'Retailer / Distributor' : 'Distributor',
+            wide: true
+          },
           { key: 'ship', header: 'Shipped By' },
           { key: 'total', header: 'Total' },
           { key: 'status', header: 'Order Status' },
@@ -808,10 +888,10 @@ function StaffOrdersExperience() {
         loading={ordersQuery.isLoading}
         empty={
           tab === 'threshold'
-            ? 'No Ship-to-Party (threshold) orders yet.'
-            : tab === 'manufacture'
-              ? 'No distributor → manufacturer orders yet.'
-              : 'No Pak Suzuki queue orders found.'
+            ? 'No threshold-reached retailer orders yet.'
+            : section === 'manufacture'
+              ? 'No distributor → manufacturer orders found.'
+              : 'No retailer orders found.'
         }
         pagination={{
           page,
@@ -826,10 +906,18 @@ function StaffOrdersExperience() {
             <td className="pl-4 pr-3 py-3.5 text-[#64748B]">{formatOrderDate(o.createdAtUtc)}</td>
             <td className="px-3 py-3.5 font-mono text-xs font-semibold text-[#0B2E59]">{o.orderNumber}</td>
             <td className="px-3 py-3.5 text-[#64748B]">
-              <div className="font-medium text-[#0B2E59]">{o.retailerName ?? '—'}</div>
-              <div className="text-xs">{o.distributorName}</div>
+              {section === 'retailer' ? (
+                <>
+                  <div className="font-medium text-[#0B2E59]">{o.retailerName ?? '—'}</div>
+                  <div className="text-xs">{o.distributorName}</div>
+                </>
+              ) : (
+                <div className="font-medium text-[#0B2E59]">{o.distributorName}</div>
+              )}
             </td>
-            <td className="px-3 py-3.5 text-[#64748B]">{o.shippedBy}</td>
+            <td className="px-3 py-3.5 text-[#64748B]">
+              {o.thresholdReached && section === 'retailer' ? 'Pak Suzuki' : o.shippedBy}
+            </td>
             <td className="px-3 py-3.5 font-semibold text-[#0B2E59]">
               Rs {o.grandTotal.toLocaleString()}
             </td>
@@ -851,7 +939,7 @@ function StaffOrdersExperience() {
               >
                 <Eye size={16} />
               </button>
-              {o.status === 'PendingPakSuzukiApproval' && (
+              {o.status === 'PendingPakSuzukiApproval' && !isViewOnly && (
                 <button
                   type="button"
                   onClick={() => navigate(`/orders/${o.id}/amend`)}

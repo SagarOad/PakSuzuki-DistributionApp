@@ -79,32 +79,28 @@ public static class OrderStatusDisplay
             case OrderStatus.ApprovedByDistributor:
                 return viewer == Viewer.Retailer
                     ? "Confirmed by distributor"
-                    : "Approved by distributor";
+                    : "Pending";
 
             case OrderStatus.PartiallyApprovedByDistributor:
                 return viewer == Viewer.Retailer
                     ? "Confirmed by distributor"
-                    : "Partially approved";
+                    : "Pending";
 
             case OrderStatus.RejectedByDistributor:
                 return viewer == Viewer.Retailer
-                    ? "Returned for changes"
-                    : "Rejected / sent back";
+                    ? "Rejected by distributor"
+                    : "Rejected";
 
             case OrderStatus.ApprovedByPakSuzuki:
-                return viewer == Viewer.Staff
-                    ? "Approved by Pak Suzuki"
-                    : "Pending";
-
             case OrderStatus.SubmittedToSap:
-                return viewer == Viewer.Staff
-                    ? "Queued for manufacturer system"
+                return viewer == Viewer.Retailer
+                    ? "Confirmed by distributor"
                     : "Pending";
 
             case OrderStatus.PartiallyDelivered:
                 return viewer == Viewer.Retailer
-                    ? "Out for delivery"
-                    : "Delivery in process";
+                    ? "In process"
+                    : "In Process";
 
             case OrderStatus.Delivered:
                 return "Delivered";

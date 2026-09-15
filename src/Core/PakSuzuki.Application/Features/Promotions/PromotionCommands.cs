@@ -28,13 +28,19 @@ public record GetPromotionByIdQuery(Guid Id) : IRequest<PromotionListDto>;
 
 public class UpsertPromotionCommandValidator : AbstractValidator<UpsertPromotionCommand>
 {
-    private static readonly string[] Allowed = { "NewsletterPopUp", "PromotionBanner" };
+    private static readonly string[] Allowed =
+    {
+        BannerImageAspect.LoginPopup,
+        BannerImageAspect.NewsletterPopUp,
+        BannerImageAspect.PromotionBanner,
+        "PromoPopup"
+    };
 
     public UpsertPromotionCommandValidator()
     {
         RuleFor(x => x.Title).NotEmpty().MaximumLength(200);
-        RuleFor(x => x.Type).Must(t => Allowed.Contains(t))
-            .WithMessage("Type must be NewsletterPopUp or PromotionBanner.");
+        RuleFor(x => x.Type).Must(t => Allowed.Contains(t, StringComparer.OrdinalIgnoreCase))
+            .WithMessage("Type must be LoginPopup.");
         RuleFor(x => x.TargetRoles).NotEmpty();
     }
 }
@@ -48,7 +54,21 @@ public class GetPromotionsQueryHandler : IRequestHandler<GetPromotionsQuery, Pag
     {
         var query = _context.Promotions.AsQueryable();
         if (!string.IsNullOrWhiteSpace(request.Type))
-            query = query.Where(p => p.Type == request.Type);
+        {
+            var type = BannerImageAspect.NormalizePromotionType(request.Type);
+            if (BannerImageAspect.IsLoginPopupType(type))
+            {
+                query = query.Where(p =>
+                    p.Type == BannerImageAspect.LoginPopup
+                    || p.Type == BannerImageAspect.NewsletterPopUp
+                    || p.Type == BannerImageAspect.PromotionBanner
+                    || p.Type == "PromoPopup");
+            }
+            else
+            {
+                query = query.Where(p => p.Type == request.Type);
+            }
+        }
         if (!string.IsNullOrWhiteSpace(request.Search))
         {
             var s = request.Search.Trim();
@@ -61,7 +81,9 @@ public class GetPromotionsQueryHandler : IRequestHandler<GetPromotionsQuery, Pag
                 p.Id, p.Title, p.Type, p.ImageUrl, p.RedirectUrl,
                 p.TargetRoles, p.IsActive, p.StartDateUtc, p.EndDateUtc, p.CreatedAtUtc));
 
-        return await PaginatedList<PromotionListDto>.CreateAsync(projected, request.PageNumber, request.PageSize);
+        var page = await PaginatedList<PromotionListDto>.CreateAsync(projected, request.PageNumber, request.PageSize);
+        var normalized = page.Items.Select(p => p with { Type = BannerImageAspect.NormalizePromotionType(p.Type) }).ToList();
+        return new PaginatedList<PromotionListDto>(normalized, page.TotalCount, page.PageNumber, request.PageSize);
     }
 }
 
@@ -75,7 +97,7 @@ public class GetPromotionByIdQueryHandler : IRequestHandler<GetPromotionByIdQuer
         var p = await _context.Promotions.FirstOrDefaultAsync(x => x.Id == request.Id, ct)
             ?? throw new NotFoundException(nameof(Promotion), request.Id);
         return new PromotionListDto(
-            p.Id, p.Title, p.Type, p.ImageUrl, p.RedirectUrl,
+            p.Id, p.Title, BannerImageAspect.NormalizePromotionType(p.Type), p.ImageUrl, p.RedirectUrl,
             p.TargetRoles, p.IsActive, p.StartDateUtc, p.EndDateUtc, p.CreatedAtUtc);
     }
 }
@@ -114,7 +136,7 @@ public class UpsertPromotionCommandHandler : IRequestHandler<UpsertPromotionComm
             await using var buffer = new MemoryStream();
             await request.ImageContent.CopyToAsync(buffer, ct);
             buffer.Position = 0;
-            BannerImageAspect.EnsureValid(buffer, request.Type);
+            BannerImageAspect.EnsureValid(buffer, BannerImageAspect.LoginPopup);
             buffer.Position = 0;
             promotion.ImageUrl = await _files.UploadAsync(
                 buffer, request.ImageFileName, Container, ct);
@@ -127,18 +149,19 @@ public class UpsertPromotionCommandHandler : IRequestHandler<UpsertPromotionComm
                 throw new ConflictException("Banner image is required.");
         }
 
-        var (w, h) = request.Type == "NewsletterPopUp" ? (335, 156) : (330, 330);
         var now = _dateTime.UtcNow;
 
         promotion.Title = request.Title.Trim();
-        promotion.Type = request.Type;
+        promotion.Type = BannerImageAspect.LoginPopup;
         promotion.RedirectUrl = string.IsNullOrWhiteSpace(request.RedirectUrl) ? null : request.RedirectUrl.Trim();
         promotion.TargetRoles = request.TargetRoles;
         promotion.IsActive = request.IsActive;
-        promotion.ImageWidth = w;
-        promotion.ImageHeight = h;
+        promotion.ImageWidth = 800;
+        promotion.ImageHeight = 600;
         promotion.StartDateUtc = request.StartDateUtc?.Date ?? now.Date;
-        promotion.EndDateUtc = request.EndDateUtc?.Date ?? now.Date.AddYears(1);
+        // Keep the whole end calendar day valid (avoid midnight truncation excluding “today”).
+        var endDay = request.EndDateUtc?.Date ?? now.Date.AddYears(1);
+        promotion.EndDateUtc = endDay.Date.AddDays(1).AddTicks(-1);
 
         await _context.SaveChangesAsync(ct);
         return promotion.Id;

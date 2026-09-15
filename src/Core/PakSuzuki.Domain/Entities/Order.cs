@@ -54,7 +54,7 @@ public class Order : EntityWithDomainEvents
     /// <summary>Manufacturer for this PO. Currently always PSMC (Pak Suzuki).</summary>
     public string? VendorCode { get; set; }
 
-    /// <summary>Product source lane: Local or C.K.D. (old "Order Type"). Separate from Order.Source (who placed the order).</summary>
+    /// <summary>Product source lane: Local, C.K.D., or In house (old "Order Type"). Separate from Order.Source (who placed the order).</summary>
     public string? MaterialSourceCode { get; set; }
 
     /// <summary>PType code that drives delivery type / SGO lane (E, G, D, …).</summary>

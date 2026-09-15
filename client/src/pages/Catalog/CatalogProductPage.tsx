@@ -5,6 +5,7 @@ import { Minus, Plus } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
 import { useCart } from '@/context/CartContext'
+import { sameMaterialSource } from '@/lib/orderLaneSource'
 import { formatPrice, packSummary, ProductTitle, type CatalogProductDetail } from './catalogTypes'
 import PlaceholderImage from '@/components/ui/PlaceholderImage'
 import clsx from 'clsx'
@@ -62,14 +63,6 @@ export default function CatalogProductPage() {
     ? retailPrice / pieces
     : null
 
-  const normalizeSource = (v?: string | null) => {
-    if (!v) return ''
-    const compact = v.replace(/[.\s\-_]/g, '')
-    if (compact.toLowerCase() === 'ckd') return 'C.K.D.'
-    if (compact.toLowerCase() === 'local' || compact.toLowerCase() === 'loc') return 'Local'
-    return v.trim()
-  }
-
   const add = (mode: 'cart' | 'buy') => {
     if (!product || !selected) return
     setLaneError(null)
@@ -78,9 +71,7 @@ export default function CatalogProductPage() {
       return
     }
     if (orderContext && product.sourceCode) {
-      const orderSource = normalizeSource(orderContext.materialSourceCode)
-      const productSource = normalizeSource(product.sourceCode)
-      if (orderSource && productSource && orderSource.toLowerCase() !== productSource.toLowerCase()) {
+      if (!sameMaterialSource(orderContext.materialSourceCode, product.sourceCode)) {
         setLaneError(
           `This product is source ${product.sourceCode}, but your order lane is ${orderContext.materialSourceCode}. Change Start Order to ${product.sourceCode}, or open a matching product.`
         )
@@ -117,6 +108,9 @@ export default function CatalogProductPage() {
         categoryName: product.categoryName,
         imageUrl: product.primaryImageUrl,
         packLabel: pack || selected.typeName,
+        packQuantity: product.packQuantity ?? selected.packQuantity ?? null,
+        unitValue: product.unitValue ?? selected.unitValue ?? null,
+        unitType: product.unitType ?? selected.unitType ?? null,
         unitPrice: cartUnitPrice,
         gstPercent: selected.gstPercent != null ? Number(selected.gstPercent) : undefined,
         fedPercent: selected.fedPercent != null ? Number(selected.fedPercent) : undefined
