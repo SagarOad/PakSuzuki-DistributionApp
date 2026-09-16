@@ -316,7 +316,14 @@ For Ship-to-Party / manufacturer delivery after Pak Suzuki approve, **Admin** us
 List query examples:
 - `GET /api/orders?pageNumber=1&pageSize=20`
 - `GET /api/orders?source=RetailerOrder`
-- `GET /api/orders?statusFilter=PendingDistributorApproval`
+- `GET /api/orders?statusFilter=PendingDistributorApproval` (one exact status — still works)
+- Tab aliases (same buckets as portal `/orders` tabs — one value returns many statuses):
+  - `GET /api/orders?statusFilter=pending` → `PendingDistributorApproval`, `PendingPakSuzukiApproval`, `SentBackForModification`
+  - `GET /api/orders?statusFilter=process` → `ApprovedByDistributor`, `PartiallyApprovedByDistributor`, `ForwardedToPakSuzuki`, `ApprovedByPakSuzuki`, `SubmittedToSap`, `PartiallyDelivered`
+  - `GET /api/orders?statusFilter=completed` → `Delivered`, `InvoiceConfirmed`
+  - `GET /api/orders?statusFilter=canceled` → `Cancelled`, `RejectedByDistributor`  
+    (use American spelling `canceled` for the tab; `Cancelled` alone still means only cancelled)
+  - `GET /api/orders?statusFilter=threshold` → orders where threshold was reached (`thresholdReached: true`), any status
 
 ---
 

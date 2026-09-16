@@ -252,6 +252,21 @@ POST /api/orders/retailer-cancel/{orderId}
 | Retailer | Cancel pending / sent-back | `POST /api/orders/retailer-cancel/{orderId}` |
 | Both | List / detail | `GET /api/orders` · `GET /api/orders/{id}` |
 
+### List tab filters (`statusFilter`)
+
+Same query param as before. Exact statuses still work. Tab aliases return a group:
+
+| Tab | Send | Statuses included |
+|-----|------|-------------------|
+| Pending | `statusFilter=pending` | `PendingDistributorApproval`, `PendingPakSuzukiApproval`, `SentBackForModification` |
+| In Process | `statusFilter=process` | `ApprovedByDistributor`, `PartiallyApprovedByDistributor`, `ForwardedToPakSuzuki`, `ApprovedByPakSuzuki`, `SubmittedToSap`, `PartiallyDelivered` |
+| Completed | `statusFilter=completed` | `Delivered`, `InvoiceConfirmed` |
+| Canceled | `statusFilter=canceled` | `Cancelled`, `RejectedByDistributor` |
+| Threshold | `statusFilter=threshold` | Any status where `thresholdReached` / `ThresholdMet` is **true** (not a status list) |
+
+Example: `GET /api/orders?statusFilter=canceled`  
+Note: use `canceled` for the tab. `statusFilter=Cancelled` still means **only** cancelled (old behavior).
+
 ---
 
 ## Flow summary

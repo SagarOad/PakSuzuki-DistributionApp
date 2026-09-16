@@ -27,6 +27,10 @@ public interface IIdentityService
     Task<UserProfileDto> GetProfileAsync(Guid userId, CancellationToken ct = default);
     Task UpdateProfileAsync(Guid userId, string userName, string email, string? phoneNumber, string? newPassword, CancellationToken ct = default);
     Task<IReadOnlyList<Guid>> GetUserIdsInRolesAsync(IEnumerable<string> roles, CancellationToken ct = default);
+    /// <summary>All users in a role (active + inactive) for admin management screens.</summary>
+    Task<IReadOnlyList<IdentityUserSummaryDto>> ListUsersInRoleAsync(string role, CancellationToken ct = default);
 }
 
 public record UserProfileDto(Guid Id, string UserName, string Email, string? PhoneNumber, string Role);
+
+public record IdentityUserSummaryDto(Guid Id, string UserName, string Email, bool IsActive);

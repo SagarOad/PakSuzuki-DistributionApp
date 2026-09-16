@@ -41,10 +41,11 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
         var hasSourceRaw = !string.IsNullOrWhiteSpace(request.SourceFilter);
         var hasStatusRaw = !string.IsNullOrWhiteSpace(request.StatusFilter);
         var sourceFilter = TryParseSource(request.SourceFilter);
-        var statusFilter = TryParseStatus(request.StatusFilter);
+        var thresholdTab = IsThresholdTabFilter(request.StatusFilter);
+        var statusResolved = thresholdTab ? [] : TryResolveStatusFilter(request.StatusFilter);
 
         // Invalid filter values → empty page (do not silently drop the filter).
-        if ((hasSourceRaw && sourceFilter is null) || (hasStatusRaw && statusFilter is null))
+        if ((hasSourceRaw && sourceFilter is null) || (hasStatusRaw && !thresholdTab && statusResolved is null))
             return new PaginatedList<OrderListDto>([], 0, request.PageNumber, request.PageSize);
 
         var query = _context.Orders
@@ -52,8 +53,16 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
             .Where(o => request.DistributorIdScope == null || o.DistributorId == request.DistributorIdScope)
             .Where(o => request.RetailerIdScope == null || o.RetailerId == request.RetailerIdScope);
 
-        if (statusFilter is not null)
-            query = query.Where(o => o.Status == statusFilter.Value);
+        // statusFilter: one exact OrderStatus, or a portal tab alias (pending/process/completed/canceled).
+        if (statusResolved is { Length: > 0 })
+        {
+            var statuses = statusResolved;
+            query = query.Where(o => statuses.Contains(o.Status));
+        }
+
+        // Portal "Threshold Reached" tab — any status where ThresholdMet is true.
+        if (thresholdTab)
+            query = query.Where(o => o.ThresholdMet);
 
         if (sourceFilter is not null)
             query = query.Where(o => o.Source == sourceFilter.Value);
@@ -160,9 +169,66 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PaginatedLi
         return Enum.TryParse<OrderSourceType>(raw, ignoreCase: true, out var parsed) ? parsed : null;
     }
 
-    private static OrderStatus? TryParseStatus(string? raw)
+    /// <summary>
+    /// Resolves <c>statusFilter</c> to one or more statuses.
+    /// Exact enum names still work (e.g. <c>Delivered</c>).
+    /// Tab aliases (same buckets as portal /orders): pending, process, completed, canceled.
+    /// Returns null when the raw value is present but invalid.
+    /// </summary>
+    private static OrderStatus[]? TryResolveStatusFilter(string? raw)
     {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        return Enum.TryParse<OrderStatus>(raw, ignoreCase: true, out var parsed) ? parsed : null;
+        if (string.IsNullOrWhiteSpace(raw)) return [];
+
+        var key = raw.Trim().ToLowerInvariant();
+
+        // Portal tab buckets — additive; do not use "cancelled" here so exact Cancelled still means one status.
+        switch (key)
+        {
+            case "pending":
+                return
+                [
+                    OrderStatus.PendingDistributorApproval,
+                    OrderStatus.PendingPakSuzukiApproval,
+                    OrderStatus.SentBackForModification
+                ];
+            case "process":
+            case "inprocess":
+            case "in-process":
+            case "in_process":
+                return
+                [
+                    OrderStatus.ApprovedByDistributor,
+                    OrderStatus.PartiallyApprovedByDistributor,
+                    OrderStatus.ForwardedToPakSuzuki,
+                    OrderStatus.ApprovedByPakSuzuki,
+                    OrderStatus.SubmittedToSap,
+                    OrderStatus.PartiallyDelivered
+                ];
+            case "completed":
+                return
+                [
+                    OrderStatus.Delivered,
+                    OrderStatus.InvoiceConfirmed
+                ];
+            case "canceled":
+            case "cancelled_tab":
+                return
+                [
+                    OrderStatus.Cancelled,
+                    OrderStatus.RejectedByDistributor
+                ];
+        }
+
+        if (Enum.TryParse<OrderStatus>(raw.Trim(), ignoreCase: true, out var parsed))
+            return [parsed];
+
+        return null;
     }
+
+    /// <summary>
+    /// True when <c>statusFilter=threshold</c> (portal Threshold Reached tab — filters by ThresholdMet, not status).
+    /// </summary>
+    private static bool IsThresholdTabFilter(string? raw) =>
+        !string.IsNullOrWhiteSpace(raw)
+        && raw.Trim().Equals("threshold", StringComparison.OrdinalIgnoreCase);
 }

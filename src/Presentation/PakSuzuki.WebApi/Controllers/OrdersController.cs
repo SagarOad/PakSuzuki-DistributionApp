@@ -79,6 +79,10 @@ public class OrdersController : BaseApiController
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
     }
 
+    /// <summary>
+    /// List orders. <paramref name="statusFilter"/> accepts one exact status
+    /// (e.g. Delivered) or a tab alias: pending, process, completed, canceled, threshold.
+    /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetOrders(
         [FromQuery] string? statusFilter,

@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ShoppingBasket, CheckCircle2, XCircle, AlertTriangle, Clock, Eye, Pencil, Briefcase,
-  Plus, MapPin, ImageIcon, Gift
+  Plus, MapPin, ImageIcon
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
 import { useAuth } from '@/context/AuthContext'
@@ -133,6 +133,24 @@ function DistributorOrdersPage() {
       })).data
   })
 
+  const ordersStatsQuery = useQuery({
+    queryKey: ['orders-stats', period],
+    queryFn: async () =>
+      (await api.get<{ series: { label: string; amount: number; orderCount: number }[] }>(
+        '/dashboards/orders-stats',
+        { params: { period } }
+      )).data
+  })
+
+  const chartPoints = useMemo(
+    () => (ordersStatsQuery.data?.series ?? []).map((p) => p.orderCount),
+    [ordersStatsQuery.data]
+  )
+  const chartLabels = useMemo(
+    () => (ordersStatsQuery.data?.series ?? []).map((p) => p.label),
+    [ordersStatsQuery.data]
+  )
+
   const profileQuery = useQuery({
     queryKey: ['distributor-profile', profileId],
     enabled: !!profileId,
@@ -257,6 +275,13 @@ function DistributorOrdersPage() {
 
   const pageItems = filteredItems.slice((page - 1) * 10, page * 10)
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / 10))
+  const showingStart = filteredItems.length === 0 ? 0 : (page - 1) * 10 + 1
+  const showingEnd = Math.min(page * 10, filteredItems.length)
+  const showingText = `Showing ${String(showingStart).padStart(2, '0')} to ${String(showingEnd).padStart(2, '0')} of ${filteredItems.length} entries`
+
+  useEffect(() => {
+    if (page > totalPages) setPage(1)
+  }, [page, totalPages])
 
   const pickSectionFor = (predicate: (o: OrderRow) => boolean): OrderSection => {
     const r = allItems.filter((o) => isRetailerSource(o.source) && predicate(o)).length
@@ -300,12 +325,6 @@ function DistributorOrdersPage() {
           { key: 'completed', label: 'Completed' },
           { key: 'canceled', label: 'Canceled' }
         ]
-
-  const chartPoints = useMemo(() => {
-    if (period === 'Week') return [8, 14, 11, 18, 22, 16, 24]
-    if (period === 'Year') return [20, 24, 22, 30, 28, 35, 32, 40, 38, 42, 45, 48]
-    return [12, 18, 15, 28, 22, 32, 30, 38, 34, 40, 36, 42]
-  }, [period])
 
   const d = profileQuery.data
 
@@ -420,22 +439,15 @@ function DistributorOrdersPage() {
                 onClick={() => setSection(pickSectionFor((o) => CANCELED.includes(o.status)), 'canceled')}
               />
             </StatCardRow>
-            <div className="mt-3">
-              <StatCard
-                tone="order-orange"
-                icon={<Gift size={20} />}
-                value="—"
-                label="Total Incentives Amount"
-              />
-            </div>
           </div>
 
           <StatsGraph
-            title="Sales Stats"
+            title="Orders Stats"
             points={chartPoints}
+            labels={chartLabels}
             period={period}
             onPeriodChange={setPeriod}
-            ariaLabel="Sales stats chart"
+            ariaLabel="Orders stats chart"
             size="large"
           />
         </div>
@@ -541,8 +553,7 @@ function DistributorOrdersPage() {
             page,
             totalPages,
             onChange: setPage,
-            variant: 'simple',
-            showingText: `Showing ${pageItems.length === 0 ? '00' : '01'} to ${String(pageItems.length).padStart(2, '0')} of ${filteredItems.length} entries`
+            showingText
           }}
         >
           {pageItems.map((o) => {
@@ -651,6 +662,11 @@ function StaffOrdersExperience() {
   const [toDate, setToDate] = useState('')
   const [exporting, setExporting] = useState(false)
 
+  const PAGE_SIZE = 10
+  const sourceParam = section === 'retailer' ? 'RetailerOrder' : 'DistributorDirectOrder'
+  const statusFilterParam =
+    tab === 'all' ? undefined : tab === 'process' ? 'process' : tab
+
   const dashQuery = useQuery({
     queryKey: ['dashboard-orders-staff', role],
     enabled: !isViewOnly,
@@ -668,54 +684,72 @@ function StaffOrdersExperience() {
 
   const boardDash = isViewOnly ? regionalDashQuery.data : dashQuery.data
 
-  const ordersQuery = useQuery({
-    queryKey: ['orders-page', page, search],
+  // Stable totals for section buttons (do not depend on which section is active).
+  const retailerCountQuery = useQuery({
+    queryKey: ['orders-section-count', 'RetailerOrder'],
     queryFn: async () =>
       (await api.get<Paged<OrderRow>>('/orders', {
-        params: { pageNumber: page, pageSize: 50, search: search || undefined }
+        params: { pageNumber: 1, pageSize: 1, source: 'RetailerOrder' }
+      })).data.totalCount
+  })
+
+  const manufactureCountQuery = useQuery({
+    queryKey: ['orders-section-count', 'DistributorDirectOrder'],
+    queryFn: async () =>
+      (await api.get<Paged<OrderRow>>('/orders', {
+        params: { pageNumber: 1, pageSize: 1, source: 'DistributorDirectOrder' }
+      })).data.totalCount
+  })
+
+  const retailerTotal = retailerCountQuery.data ?? 0
+  const manufactureTotal = manufactureCountQuery.data ?? 0
+
+  const ordersQuery = useQuery({
+    queryKey: ['orders-page', page, search, section, tab],
+    queryFn: async () =>
+      (await api.get<Paged<OrderRow>>('/orders', {
+        params: {
+          pageNumber: page,
+          pageSize: PAGE_SIZE,
+          search: search || undefined,
+          source: sourceParam,
+          statusFilter: statusFilterParam
+        }
       })).data
   })
 
-  const staffItems = ordersQuery.data?.items ?? []
-  const retailerItems = staffItems.filter((o) => isRetailerSource(o.source))
-  const manufactureItems = staffItems.filter((o) => isManufactureSource(o.source))
-  const sectionItems = section === 'retailer' ? retailerItems : manufactureItems
+  // Snapshot for status cards (same section, no status tab filter).
+  const sectionStatsQuery = useQuery({
+    queryKey: ['orders-section-stats', section],
+    queryFn: async () =>
+      (await api.get<Paged<OrderRow>>('/orders', {
+        params: {
+          pageNumber: 1,
+          pageSize: 200,
+          source: sourceParam
+        }
+      })).data
+  })
 
-  const inProcess = sectionItems.filter((o) => PROCESS.includes(o.status) || PENDING.includes(o.status)).length
-  const completed = sectionItems.filter((o) => COMPLETED.includes(o.status)).length
-  const canceled = sectionItems.filter((o) => CANCELED.includes(o.status)).length
-  const pending = sectionItems.filter((o) => PENDING.includes(o.status)).length
-  const thresholdCount = retailerItems.filter((o) => o.thresholdReached).length
+  const statsItems = sectionStatsQuery.data?.items ?? []
+  const inProcess = statsItems.filter((o) => PROCESS.includes(o.status) || PENDING.includes(o.status)).length
+  const completed = statsItems.filter((o) => COMPLETED.includes(o.status)).length
+  const canceled = statsItems.filter((o) => CANCELED.includes(o.status)).length
+  const pending = statsItems.filter((o) => PENDING.includes(o.status)).length
+  const thresholdCount = statsItems.filter((o) => o.thresholdReached).length
+  const sectionTotal =
+    section === 'retailer' ? retailerTotal : manufactureTotal
 
-  function filterStaffOrders(list: OrderRow[]) {
-    let next = list.filter((o) =>
-      section === 'retailer' ? isRetailerSource(o.source) : isManufactureSource(o.source)
-    )
-    if (tab === 'pending') next = next.filter((o) => PENDING.includes(o.status))
-    if (tab === 'process') {
-      if (section === 'manufacture') next = next.filter((o) => PROCESS.includes(o.status))
-      else next = next.filter((o) => PROCESS.includes(o.status) && !PENDING.includes(o.status))
-    }
-    if (tab === 'completed') next = next.filter((o) => COMPLETED.includes(o.status))
-    if (tab === 'canceled') next = next.filter((o) => CANCELED.includes(o.status))
-    if (tab === 'threshold') next = next.filter((o) => o.thresholdReached)
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      next = next.filter(
-        (o) =>
-          o.orderNumber.toLowerCase().includes(q) ||
-          o.distributorName.toLowerCase().includes(q) ||
-          (o.retailerName ?? '').toLowerCase().includes(q)
-      )
-    }
-    return next.filter((o) => inDateRange(o.createdAtUtc, fromDate, toDate))
-  }
+  const pageItems = useMemo(() => {
+    const list = ordersQuery.data?.items ?? []
+    return list.filter((o) => inDateRange(o.createdAtUtc, fromDate, toDate))
+  }, [ordersQuery.data, fromDate, toDate])
 
-  const filteredItems = useMemo(
-    () => filterStaffOrders(ordersQuery.data?.items ?? []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ordersQuery.data, section, tab, search, fromDate, toDate]
-  )
+  const totalCount = ordersQuery.data?.totalCount ?? 0
+  const totalPages = Math.max(1, ordersQuery.data?.totalPages ?? 1)
+  const showingStart = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const showingEnd = Math.min(page * PAGE_SIZE, totalCount)
+  const showingText = `Showing ${String(showingStart).padStart(2, '0')} to ${String(showingEnd).padStart(2, '0')} of ${totalCount} entries`
 
   const statusTabs: { key: StatusTab; label: string }[] =
     section === 'retailer'
@@ -737,8 +771,12 @@ function StaffOrdersExperience() {
   async function exportStaffOrders() {
     setExporting(true)
     try {
-      const all = await fetchAllFromApi<OrderRow>('/orders', { search: search || undefined })
-      const rows = filterStaffOrders(all)
+      const all = await fetchAllFromApi<OrderRow>('/orders', {
+        search: search || undefined,
+        source: sourceParam,
+        statusFilter: statusFilterParam
+      })
+      const rows = all.filter((o) => inDateRange(o.createdAtUtc, fromDate, toDate))
       downloadExcel(
         `orders-${section}-${tab}${fromDate ? `-from-${fromDate}` : ''}${toDate ? `-to-${toDate}` : ''}`,
         [
@@ -759,11 +797,28 @@ function StaffOrdersExperience() {
     }
   }
 
-  const chartPoints = useMemo(() => {
-    if (period === 'Week') return [8, 14, 11, 18, 22, 16, 24]
-    if (period === 'Year') return [20, 24, 22, 30, 28, 35, 32, 40, 38, 42, 45, 48]
-    return [12, 18, 15, 28, 22, 32, 30, 38, 34, 40, 36, 42]
-  }, [period])
+  const ordersStatsQuery = useQuery({
+    queryKey: ['orders-stats-staff', period, section],
+    queryFn: async () =>
+      (await api.get<{ series: { label: string; amount: number; orderCount: number }[] }>(
+        '/dashboards/orders-stats',
+        {
+          params: {
+            period,
+            source: section === 'retailer' ? 'RetailerOrder' : 'DistributorDirectOrder'
+          }
+        }
+      )).data
+  })
+
+  const chartPoints = useMemo(
+    () => (ordersStatsQuery.data?.series ?? []).map((p) => p.orderCount),
+    [ordersStatsQuery.data]
+  )
+  const chartLabels = useMemo(
+    () => (ordersStatsQuery.data?.series ?? []).map((p) => p.label),
+    [ordersStatsQuery.data]
+  )
 
   const changeSection = (next: OrderSection) => {
     setSection(next)
@@ -790,7 +845,7 @@ function StaffOrdersExperience() {
         >
           <ShoppingBasket size={16} />
           Retailer Orders
-          <span className="text-xs font-semibold text-suzuki-mute">({retailerItems.length})</span>
+          <span className="text-xs font-semibold text-suzuki-mute">({retailerTotal})</span>
         </button>
         <button
           type="button"
@@ -802,7 +857,7 @@ function StaffOrdersExperience() {
         >
           <Briefcase size={16} />
           Manufacturer Orders
-          <span className="text-xs font-semibold text-suzuki-mute">({manufactureItems.length})</span>
+          <span className="text-xs font-semibold text-suzuki-mute">({manufactureTotal})</span>
         </button>
       </div>
 
@@ -810,7 +865,7 @@ function StaffOrdersExperience() {
         <StatCard
           tone="order-blue"
           icon={<ShoppingBasket size={20} />}
-          value={sectionItems.length || boardDash?.totalOrders || '—'}
+          value={sectionTotal || boardDash?.totalOrders || '—'}
           label={section === 'retailer' ? 'Retailer Orders' : 'Manufacturer Orders'}
           onClick={() => { setTab('all'); setPage(1) }}
         />
@@ -834,6 +889,7 @@ function StaffOrdersExperience() {
       <StatsGraph
         title="Orders Stats"
         points={chartPoints}
+        labels={chartLabels}
         period={period}
         onPeriodChange={setPeriod}
         ariaLabel="Orders stats chart"
@@ -894,14 +950,13 @@ function StaffOrdersExperience() {
               : 'No retailer orders found.'
         }
         pagination={{
-          page,
-          totalPages: ordersQuery.data?.totalPages ?? 1,
+          page: ordersQuery.data?.pageNumber ?? page,
+          totalPages,
           onChange: setPage,
-          variant: 'simple',
-          showingText: `Showing ${filteredItems.length === 0 ? '00' : '01'} to ${String(filteredItems.length).padStart(2, '0')} of ${filteredItems.length} entries`
+          showingText
         }}
       >
-        {filteredItems.map((o) => (
+        {pageItems.map((o) => (
           <tr key={o.id} className="border-b border-[#E2E4EA]/80 hover:bg-[#F5F7FB]/60">
             <td className="pl-4 pr-3 py-3.5 text-[#64748B]">{formatOrderDate(o.createdAtUtc)}</td>
             <td className="px-3 py-3.5 font-mono text-xs font-semibold text-[#0B2E59]">{o.orderNumber}</td>

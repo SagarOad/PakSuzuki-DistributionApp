@@ -108,7 +108,8 @@ public class RetailersController : BaseApiController
     {
         await Mediator.Send(new UpdateRetailerCommand(
             id, request.Name, request.MobileNumber, request.Email, request.BusinessName,
-            request.Ntn, request.Iban, request.BusinessAddress, request.Latitude, request.Longitude));
+            request.Ntn, request.Iban, request.BusinessAddress, request.Latitude, request.Longitude,
+            request.SapBusinessPartnerCode));
         return NoContent();
     }
 
@@ -236,4 +237,5 @@ public class RegisterRetailerRequest
 
 public record UpdateRetailerRequest(
     string Name, string MobileNumber, string Email, string BusinessName,
-    string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude);
+    string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude,
+    string? SapBusinessPartnerCode = null);

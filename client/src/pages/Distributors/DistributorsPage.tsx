@@ -286,8 +286,7 @@ export default function DistributorsPage() {
                 onChange={(v) => { setStatusFilter(v); setPage(1) }}
                 options={[
                   { value: 'all', label: 'All Distributors' },
-                  { value: 'active', label: 'Active' },
-                  { value: 'pending', label: 'Pending' }
+                  { value: 'active', label: 'Active' }
                 ]}
               />
               <span className="text-sm font-semibold text-[#0B2E59]">From</span>

@@ -42,7 +42,7 @@ export default function MobileAppOnlyPage() {
               </>
             ) : null}
             Retailer accounts are managed in the <strong className="text-suzuki-ink">Pak Suzuki</strong> mobile
-            app — ordering, claims, and shop features are not available on this web portal.
+            app — ordering and shop features are not available on this web portal.
           </p>
           <p className="mt-4 text-sm text-suzuki-mute leading-relaxed">
             Open the app on your phone and sign in with the same email and password.

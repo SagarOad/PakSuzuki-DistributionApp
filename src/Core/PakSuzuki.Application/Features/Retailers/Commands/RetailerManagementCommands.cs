@@ -13,7 +13,8 @@ namespace PakSuzuki.Application.Features.Retailers.Commands;
 // ApproveRetailerCommand, blocking/unblocking through their own dedicated commands.
 public record UpdateRetailerCommand(
     Guid Id, string Name, string MobileNumber, string Email, string BusinessName,
-    string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude
+    string Ntn, string Iban, string BusinessAddress, double Latitude, double Longitude,
+    string? SapBusinessPartnerCode = null
 ) : IRequest;
 
 public class UpdateRetailerCommandValidator : AbstractValidator<UpdateRetailerCommand>
@@ -64,6 +65,13 @@ public class UpdateRetailerCommandHandler : IRequestHandler<UpdateRetailerComman
         retailer.BusinessAddress = request.BusinessAddress;
         retailer.Latitude = request.Latitude;
         retailer.Longitude = request.Longitude;
+
+        if (isStaff && request.SapBusinessPartnerCode != null)
+        {
+            retailer.SapBusinessPartnerCode = string.IsNullOrWhiteSpace(request.SapBusinessPartnerCode)
+                ? null
+                : request.SapBusinessPartnerCode.Trim();
+        }
 
         await _context.SaveChangesAsync(ct);
     }

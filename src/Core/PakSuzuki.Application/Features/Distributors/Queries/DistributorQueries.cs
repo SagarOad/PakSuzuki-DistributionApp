@@ -26,6 +26,10 @@ public class GetDistributorsQueryHandler : IRequestHandler<GetDistributorsQuery,
         var query = _context.Distributors
             .Where(d => request.RegionId == null || d.RegionId == request.RegionId)
             .Where(d => request.Status == null || d.ApprovalStatus.ToString() == request.Status)
+            // Main list / "All" tab: pending + sent-back stay on /distributors/pending only.
+            .Where(d => request.Status != null
+                || (d.ApprovalStatus != ApprovalStatus.PendingReview
+                    && d.ApprovalStatus != ApprovalStatus.SentBackForCorrection))
             .Where(d => request.Search == null
                 || d.Name.Contains(request.Search)
                 || d.BusinessName.Contains(request.Search)

@@ -352,6 +352,41 @@ public class GetRetailerProfileStatsQueryHandler : IRequestHandler<GetRetailerPr
     }
 }
 
+/// <summary>Orders page chart — real counts by Week / Month / Year (optional source filter).</summary>
+public record OrdersStatsDto(List<SalesSeriesPointDto> Series);
+
+public record GetOrdersStatsQuery(string Period = "Month", string? Source = null) : IRequest<OrdersStatsDto>;
+
+public class GetOrdersStatsQueryHandler : IRequestHandler<GetOrdersStatsQuery, OrdersStatsDto>
+{
+    private readonly IApplicationDbContext _context;
+    private readonly IDateTimeService _dateTime;
+
+    public GetOrdersStatsQueryHandler(IApplicationDbContext context, IDateTimeService dateTime)
+    {
+        _context = context;
+        _dateTime = dateTime;
+    }
+
+    public async Task<OrdersStatsDto> Handle(GetOrdersStatsQuery request, CancellationToken ct)
+    {
+        var query = _context.Orders.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(request.Source))
+        {
+            if (request.Source is "0" or "RetailerOrder"
+                || request.Source.Equals(nameof(OrderSourceType.RetailerOrder), StringComparison.OrdinalIgnoreCase))
+                query = query.Where(o => o.Source == OrderSourceType.RetailerOrder);
+            else if (request.Source is "1" or "DistributorDirectOrder"
+                || request.Source.Equals(nameof(OrderSourceType.DistributorDirectOrder), StringComparison.OrdinalIgnoreCase))
+                query = query.Where(o => o.Source == OrderSourceType.DistributorDirectOrder);
+        }
+
+        var series = await ProfileStatsHelper.BuildSeriesAsync(query, request.Period, _dateTime.UtcNow, ct);
+        return new OrdersStatsDto(series);
+    }
+}
+
 internal static class ProfileStatsHelper
 {
     private static readonly OrderStatus[] InProcess =
@@ -399,7 +434,7 @@ internal static class ProfileStatsHelper
             totalOrders, inProcess, completed, canceled, totalRetailers, totalSales, ordersByStatus, series);
     }
 
-    private static async Task<List<SalesSeriesPointDto>> BuildSeriesAsync(
+    public static async Task<List<SalesSeriesPointDto>> BuildSeriesAsync(
         IQueryable<Domain.Entities.Order> ordersQuery, string period, DateTime utcNow, CancellationToken ct)
     {
         period = (period ?? "Month").Trim();

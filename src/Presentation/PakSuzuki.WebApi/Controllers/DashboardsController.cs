@@ -64,6 +64,27 @@ public class DashboardsController : BaseApiController
         return Ok(await Mediator.Send(new GetRetailerProfileStatsQuery(retailerId, period)));
     }
 
+    /// <summary>Orders list chart series (order counts over Week / Month / Year).</summary>
+    [HttpGet("orders-stats")]
+    [Authorize]
+    public async Task<IActionResult> OrdersStats(
+        [FromQuery] string period = "Month",
+        [FromQuery] string? source = null)
+    {
+        if (_currentUser.Role is not (Roles.SuperAdmin or Roles.Admin or Roles.Distributor or Roles.RegionalHead))
+            return Forbid();
+
+        // Distributor always scoped to their own orders.
+        if (_currentUser.Role == Roles.Distributor)
+        {
+            var distId = _currentUser.DistributorId ?? throw new UnauthorizedAccessException();
+            var profile = await Mediator.Send(new GetDistributorProfileStatsQuery(distId, period));
+            return Ok(new OrdersStatsDto(profile.SalesSeries));
+        }
+
+        return Ok(await Mediator.Send(new GetOrdersStatsQuery(period, source)));
+    }
+
     [HttpGet("regional-head")]
     [Authorize(Roles = Roles.RegionalHead)]
     public async Task<IActionResult> RegionalHead()

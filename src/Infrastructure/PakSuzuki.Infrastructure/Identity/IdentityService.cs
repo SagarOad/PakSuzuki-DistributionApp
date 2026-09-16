@@ -495,4 +495,17 @@ public class IdentityService : IIdentityService
 
         return result.ToList();
     }
+
+    public async Task<IReadOnlyList<IdentityUserSummaryDto>> ListUsersInRoleAsync(string role, CancellationToken ct = default)
+    {
+        var users = await _userManager.GetUsersInRoleAsync(role);
+        return users
+            .OrderBy(u => u.Email ?? u.UserName)
+            .Select(u => new IdentityUserSummaryDto(
+                u.Id,
+                u.UserName ?? "",
+                u.Email ?? "",
+                u.IsActive))
+            .ToList();
+    }
 }

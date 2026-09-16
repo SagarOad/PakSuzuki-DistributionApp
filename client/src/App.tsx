@@ -22,16 +22,11 @@ import BannerFormPage from './pages/Shop/BannerFormPage'
 import ProductDetailsPage from './pages/Shop/ProductDetailsPage'
 import DistributorRegisterPage from './pages/Distributors/DistributorRegisterPage'
 import RetailerRegisterPage from './pages/Retailers/RetailerRegisterPage'
-import IncentivesPage from './pages/Incentives/IncentivesPage'
-import IncentiveFormPage from './pages/Incentives/IncentiveFormPage'
-import IncentiveDetailPage from './pages/Incentives/IncentiveDetailPage'
-import ProductGroupsPage from './pages/Incentives/ProductGroupsPage'
 import IncentiveSchemesPage, {
   IncentiveSchemeDetailPage,
   IncentiveSchemeFormPage
 } from './pages/Incentives/IncentiveSchemesPages'
-import ClaimsPage from './pages/Claims/ClaimsPage'
-import ClaimDetailsPage from './pages/Claims/ClaimDetailsPage'
+import ProductGroupsPage from './pages/Incentives/ProductGroupsPage'
 import PromotionsPage from './pages/Promotions/PromotionsPage'
 import ReportsPage from './pages/Reports/ReportsPage'
 import SettingsPage from './pages/Settings/SettingsPage'
@@ -71,8 +66,6 @@ export default function App() {
           <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin']} />}>
             <Route path="/orders/middleware" element={<MiddlewarePickupPage />} />
           </Route>
-          <Route path="/claims" element={<ClaimsPage />} />
-          <Route path="/claims/:id" element={<ClaimDetailsPage />} />
           <Route path="/more" element={<MorePage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
@@ -84,8 +77,6 @@ export default function App() {
             <Route path="/distributors/:id" element={<DistributorProfilePage />} />
             <Route path="/retailers" element={<RetailersPage />} />
             <Route path="/retailers/:id" element={<RetailerDetailPage />} />
-            <Route path="/incentives" element={<IncentivesPage />} />
-            <Route path="/incentives/:id" element={<IncentiveDetailPage />} />
           </Route>
 
           <Route element={<ProtectedRoute allowedRoles={['SuperAdmin', 'Admin']} />}>
@@ -95,8 +86,6 @@ export default function App() {
             <Route path="/shop/products/:id" element={<ProductDetailsPage />} />
             <Route path="/distributors" element={<DistributorsPage />} />
             <Route path="/promotions" element={<PromotionsPage />} />
-            <Route path="/incentives/new" element={<IncentiveFormPage />} />
-            <Route path="/incentives/:id/edit" element={<IncentiveFormPage />} />
             <Route path="/product-groups" element={<ProductGroupsPage />} />
             <Route path="/incentive-schemes" element={<IncentiveSchemesPage />} />
             <Route path="/incentive-schemes/new" element={<IncentiveSchemeFormPage />} />

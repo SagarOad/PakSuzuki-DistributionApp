@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ShoppingBasket, CheckCircle2, XCircle, Clock, MapPin,
-  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft
+  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft, Pencil
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
+import { useAuth } from '@/context/AuthContext'
 import { StatCard } from '@/components/ui/StatCard'
 import { ProfileChart, useChartPeriod } from '@/components/ui/ProfileChart'
 import ImageGallery from '@/components/ui/ImageGallery'
@@ -40,6 +41,7 @@ interface RetailerDetail {
   superAdminApprovalStatus: string
   profileImageUrl?: string | null
   images: { id: string; storageUrl: string; fileName: string }[]
+  sapBusinessPartnerCode?: string | null
 }
 
 interface ProfileStats {
@@ -81,16 +83,76 @@ const CANCELED = ['Cancelled', 'RejectedByDistributor']
 export default function RetailerDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const qc = useQueryClient()
+  const { role } = useAuth()
+  const canEdit = role === 'SuperAdmin' || role === 'Admin'
   const [period, setPeriod] = useChartPeriod('Month')
   const [tab, setTab] = useState<StatusTab>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [exporting, setExporting] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [form, setForm] = useState({
+    name: '',
+    mobileNumber: '',
+    email: '',
+    businessName: '',
+    ntn: '',
+    iban: '',
+    businessAddress: '',
+    sapBusinessPartnerCode: ''
+  })
 
   const detailQuery = useQuery({
     queryKey: ['retailer-detail', id],
     enabled: !!id,
     queryFn: async () => (await api.get<RetailerDetail>(`/retailers/${id}`)).data
+  })
+
+  const startEdit = () => {
+    const r = detailQuery.data
+    if (!r) return
+    setForm({
+      name: r.name,
+      mobileNumber: r.mobileNumber,
+      email: r.email,
+      businessName: r.businessName,
+      ntn: r.ntn,
+      iban: r.iban,
+      businessAddress: r.businessAddress,
+      sapBusinessPartnerCode: r.sapBusinessPartnerCode ?? ''
+    })
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  const saveEdit = useMutation({
+    mutationFn: async () => {
+      if (!id || !detailQuery.data) throw new Error('Missing retailer')
+      await api.put(`/retailers/${id}`, {
+        name: form.name.trim(),
+        mobileNumber: form.mobileNumber.trim(),
+        email: form.email.trim(),
+        businessName: form.businessName.trim(),
+        ntn: form.ntn.trim(),
+        iban: form.iban.trim(),
+        businessAddress: form.businessAddress.trim(),
+        latitude: detailQuery.data.latitude,
+        longitude: detailQuery.data.longitude,
+        sapBusinessPartnerCode: form.sapBusinessPartnerCode.trim()
+      })
+    },
+    onSuccess: async () => {
+      setEditing(false)
+      setSaveError(null)
+      await qc.invalidateQueries({ queryKey: ['retailer-detail', id] })
+      await qc.invalidateQueries({ queryKey: ['retailers-list'] })
+    },
+    onError: (err: unknown) => {
+      const ax = err as { response?: { data?: { detail?: string; title?: string } }; message?: string }
+      setSaveError(ax.response?.data?.detail ?? ax.response?.data?.title ?? ax.message ?? 'Could not save.')
+    }
   })
 
   const statsQuery = useQuery({
@@ -208,6 +270,15 @@ export default function RetailerDetailPage() {
         <h1 className="text-2xl font-extrabold text-suzuki-navy">
           {r.name} <span className="text-suzuki-mute font-bold">(Retailer)</span>
         </h1>
+        {canEdit && !editing && (
+          <button
+            type="button"
+            onClick={startEdit}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-suzuki-red text-white text-sm font-bold px-3 py-2"
+          >
+            <Pencil size={14} /> Edit
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4">
@@ -225,14 +296,61 @@ export default function RetailerDetailPage() {
             </div>
           </div>
 
-          <dl className="space-y-2 text-sm">
-            <InfoRow label="CNIC" value={r.cnic} />
-            <InfoRow label="Contact Number" value={r.mobileNumber} />
-            <InfoRow label="Email" value={r.email} />
-            <InfoRow label="Business Name" value={r.businessName} />
-            <InfoRow label="NTN" value={r.ntn} />
-            <InfoRow label="IBAN" value={r.iban} />
-          </dl>
+          {editing ? (
+            <div className="space-y-2">
+              {saveError && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-700">{saveError}</div>
+              )}
+              {(
+                [
+                  ['name', 'Name'],
+                  ['mobileNumber', 'Contact Number'],
+                  ['email', 'Email'],
+                  ['businessName', 'Business Name'],
+                  ['ntn', 'NTN'],
+                  ['iban', 'IBAN'],
+                  ['businessAddress', 'Business Address'],
+                  ['sapBusinessPartnerCode', 'SAP Business Partner Code']
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="block space-y-1">
+                  <span className="text-xs font-bold text-suzuki-navy">{label}</span>
+                  <input
+                    value={form[key]}
+                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                    className="w-full rounded-lg border border-sky-100 bg-sky-50 px-2.5 py-2 text-sm font-semibold text-suzuki-navy outline-none focus:border-suzuki-blue"
+                  />
+                </label>
+              ))}
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => { setEditing(false); setSaveError(null) }}
+                  className="flex-1 rounded-xl bg-sky-100 text-suzuki-navy font-bold py-2 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={saveEdit.isPending}
+                  onClick={() => saveEdit.mutate()}
+                  className="flex-1 rounded-xl bg-suzuki-red text-white font-bold py-2 text-sm disabled:opacity-50"
+                >
+                  {saveEdit.isPending ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <dl className="space-y-2 text-sm">
+              <InfoRow label="CNIC" value={r.cnic} />
+              <InfoRow label="Contact Number" value={r.mobileNumber} />
+              <InfoRow label="Email" value={r.email} />
+              <InfoRow label="Business Name" value={r.businessName} />
+              <InfoRow label="NTN" value={r.ntn} />
+              <InfoRow label="IBAN" value={r.iban} />
+              <InfoRow label="SAP BP Code" value={r.sapBusinessPartnerCode || '—'} />
+            </dl>
+          )}
 
           <div className="rounded-xl border border-suzuki-line p-3">
             <div className="text-xs text-suzuki-mute flex gap-1.5">

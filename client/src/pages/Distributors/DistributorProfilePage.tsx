@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ShoppingBasket, CheckCircle2, XCircle, Clock, Package, MapPin,
-  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft
+  Search, Eye, FileSpreadsheet, ChevronLeft, ChevronRight, ArrowLeft, Pencil
 } from 'lucide-react'
 import { api } from '@/api/axiosClient'
+import { useAuth } from '@/context/AuthContext'
 import { StatCard } from '@/components/ui/StatCard'
 import { ProfileChart, useChartPeriod } from '@/components/ui/ProfileChart'
 import ImageGallery from '@/components/ui/ImageGallery'
@@ -31,6 +32,8 @@ interface DistributorDetail {
   isActive: boolean
   profileImageUrl?: string | null
   images: { id: string; storageUrl: string; fileName: string }[]
+  sapDealerCode?: string | null
+  sapShipToCode?: string | null
 }
 
 interface ProfileStats {
@@ -65,15 +68,78 @@ interface Paged<T> {
 export default function DistributorProfilePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const qc = useQueryClient()
+  const { role } = useAuth()
+  const canEdit = role === 'SuperAdmin' || role === 'Admin'
   const [period, setPeriod] = useChartPeriod('Month')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [exporting, setExporting] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [form, setForm] = useState({
+    name: '',
+    mobileNumber: '',
+    email: '',
+    businessName: '',
+    ntn: '',
+    iban: '',
+    businessAddress: '',
+    sapDealerCode: '',
+    sapShipToCode: ''
+  })
 
   const detailQuery = useQuery({
     queryKey: ['distributor-detail', id],
     enabled: !!id,
     queryFn: async () => (await api.get<DistributorDetail>(`/distributors/${id}`)).data
+  })
+
+  const startEdit = () => {
+    const d = detailQuery.data
+    if (!d) return
+    setForm({
+      name: d.name,
+      mobileNumber: d.mobileNumber,
+      email: d.email,
+      businessName: d.businessName,
+      ntn: d.ntn,
+      iban: d.iban,
+      businessAddress: d.businessAddress,
+      sapDealerCode: d.sapDealerCode ?? '',
+      sapShipToCode: d.sapShipToCode ?? ''
+    })
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  const saveEdit = useMutation({
+    mutationFn: async () => {
+      if (!id || !detailQuery.data) throw new Error('Missing distributor')
+      await api.put(`/distributors/${id}`, {
+        name: form.name.trim(),
+        mobileNumber: form.mobileNumber.trim(),
+        email: form.email.trim(),
+        businessName: form.businessName.trim(),
+        ntn: form.ntn.trim(),
+        iban: form.iban.trim(),
+        businessAddress: form.businessAddress.trim(),
+        latitude: detailQuery.data.latitude,
+        longitude: detailQuery.data.longitude,
+        sapDealerCode: form.sapDealerCode.trim(),
+        sapShipToCode: form.sapShipToCode.trim()
+      })
+    },
+    onSuccess: async () => {
+      setEditing(false)
+      setSaveError(null)
+      await qc.invalidateQueries({ queryKey: ['distributor-detail', id] })
+      await qc.invalidateQueries({ queryKey: ['distributors-list'] })
+    },
+    onError: (err: unknown) => {
+      const ax = err as { response?: { data?: { detail?: string; title?: string } }; message?: string }
+      setSaveError(ax.response?.data?.detail ?? ax.response?.data?.title ?? ax.message ?? 'Could not save.')
+    }
   })
 
   const statsQuery = useQuery({
@@ -159,7 +225,7 @@ export default function DistributorProfilePage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <button
           type="button"
           onClick={() => navigate('/distributors')}
@@ -169,6 +235,15 @@ export default function DistributorProfilePage() {
         </button>
         <h1 className="text-2xl font-extrabold text-suzuki-navy">{d.name}</h1>
         <span className="text-sm text-suzuki-mute">({d.distributorCode})</span>
+        {canEdit && !editing && (
+          <button
+            type="button"
+            onClick={startEdit}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-suzuki-red text-white text-sm font-bold px-3 py-2"
+          >
+            <Pencil size={14} /> Edit
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-5">
@@ -187,14 +262,64 @@ export default function DistributorProfilePage() {
                 <div className="text-xs text-suzuki-mute">{d.distributorCode} · {d.regionName}</div>
               </div>
             </div>
-            <dl className="mt-3 space-y-2 text-sm">
-              <InfoRow label="CNIC" value={d.cnic} />
-              <InfoRow label="Contact Number" value={d.mobileNumber} />
-              <InfoRow label="Email" value={d.email} />
-              <InfoRow label="Business Name" value={d.businessName} />
-              <InfoRow label="NTN" value={d.ntn} />
-              <InfoRow label="IBAN" value={d.iban} />
-            </dl>
+
+            {editing ? (
+              <div className="mt-3 space-y-2">
+                {saveError && (
+                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-700">{saveError}</div>
+                )}
+                {(
+                  [
+                    ['name', 'Name'],
+                    ['mobileNumber', 'Contact Number'],
+                    ['email', 'Email'],
+                    ['businessName', 'Business Name'],
+                    ['ntn', 'NTN'],
+                    ['iban', 'IBAN'],
+                    ['businessAddress', 'Business Address'],
+                    ['sapDealerCode', 'SAP Dealer Code'],
+                    ['sapShipToCode', 'SAP Ship-To Code']
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="block space-y-1">
+                    <span className="text-xs font-bold text-suzuki-navy">{label}</span>
+                    <input
+                      value={form[key]}
+                      onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                      className="w-full rounded-lg border border-sky-100 bg-sky-50 px-2.5 py-2 text-sm font-semibold text-suzuki-navy outline-none focus:border-suzuki-blue"
+                    />
+                  </label>
+                ))}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => { setEditing(false); setSaveError(null) }}
+                    className="flex-1 rounded-xl bg-sky-100 text-suzuki-navy font-bold py-2 text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saveEdit.isPending}
+                    onClick={() => saveEdit.mutate()}
+                    className="flex-1 rounded-xl bg-suzuki-red text-white font-bold py-2 text-sm disabled:opacity-50"
+                  >
+                    {saveEdit.isPending ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <dl className="mt-3 space-y-2 text-sm">
+                <InfoRow label="CNIC" value={d.cnic} />
+                <InfoRow label="Contact Number" value={d.mobileNumber} />
+                <InfoRow label="Email" value={d.email} />
+                <InfoRow label="Business Name" value={d.businessName} />
+                <InfoRow label="NTN" value={d.ntn} />
+                <InfoRow label="IBAN" value={d.iban} />
+                <InfoRow label="SAP Dealer Code" value={d.sapDealerCode || '—'} />
+                <InfoRow label="SAP Ship-To Code" value={d.sapShipToCode || '—'} />
+              </dl>
+            )}
           </div>
 
           <div className="rounded-xl border border-suzuki-line p-3">

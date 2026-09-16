@@ -23,7 +23,7 @@ export default function MorePage() {
     {
       to: '/reports',
       title: 'Reports',
-      note: 'Sales, orders, targets, and claims report exports.',
+      note: 'Live sales and order stats, plus Excel downloads for orders, parties, and products.',
       icon: FileBarChart2,
       roles: ['SuperAdmin', 'Admin', 'Distributor']
     },
@@ -40,13 +40,6 @@ export default function MorePage() {
       note: 'Product groups, slab schemes, live evaluation, and distributor PDF reports.',
       icon: Gift,
       roles: ['SuperAdmin', 'Admin']
-    },
-    {
-      to: '/incentives',
-      title: 'Legacy incentives',
-      note: 'View legacy incentive programs, targets, and achievement.',
-      icon: Gift,
-      roles: ['SuperAdmin', 'Admin', 'Distributor']
     }
   ].filter((i) => !role || i.roles.includes(role))
 

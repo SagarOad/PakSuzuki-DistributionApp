@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Eye, EyeOff, FileText, Layers, LogOut, Package, Pencil, ShoppingBag, UserRound
+  Eye, EyeOff, FileText, Layers, LogOut, MapPinned, Package, Pencil, ShoppingBag, UserRound
 } from 'lucide-react'
 import clsx from 'clsx'
 import { api } from '@/api/axiosClient'
@@ -11,6 +11,7 @@ import { useAuthStore } from '@/context/authStore'
 import PlaceholderImage from '@/components/ui/PlaceholderImage'
 import type { CatalogLookups } from '@/pages/Products/productWizardTypes'
 import ProductGroupsPage from '@/pages/Incentives/ProductGroupsPage'
+import RegionalHeadsPanel from '@/pages/Settings/RegionalHeadsPanel'
 
 interface Profile {
   id: string
@@ -42,7 +43,7 @@ interface DistributorBiz {
   images: { id: string; storageUrl: string; fileName: string }[]
 }
 
-type SettingsTab = 'profile' | 'privacy' | 'refund' | 'threshold' | 'product-groups'
+type SettingsTab = 'profile' | 'privacy' | 'refund' | 'threshold' | 'product-groups' | 'regional-heads'
 
 export default function SettingsPage() {
   const { logout, role: authRole } = useAuth()
@@ -311,6 +312,12 @@ export default function SettingsPage() {
                 label="Product groups"
                 onClick={() => { setTab('product-groups'); setMessage(null); setError(null) }}
               />
+              <SideItem
+                active={tab === 'regional-heads'}
+                icon={<MapPinned size={18} />}
+                label="Regional Heads"
+                onClick={() => { setTab('regional-heads'); setMessage(null); setError(null) }}
+              />
             </>
           )}
           <button
@@ -508,13 +515,20 @@ export default function SettingsPage() {
           {tab === 'refund' && (
             <PolicyPanel title="Refund Policy">
               Order cancellations and returns follow the commercial terms agreed with your assigned Pak Suzuki
-              counterpart. Approved claims and incentive payouts are processed per the active program rules.
-              For disputes, open a claim from My Orders / Claims or contact Pakistan Suzuki support.
+              counterpart. Approved incentive payouts are processed per the active program rules.
+              For disputes, contact Pakistan Suzuki support.
             </PolicyPanel>
           )}
 
           {tab === 'product-groups' && isStaff && (
             <ProductGroupsPage embedded />
+          )}
+
+          {tab === 'regional-heads' && isStaff && (
+            <RegionalHeadsPanel
+              onMessage={setMessage}
+              onError={setError}
+            />
           )}
 
           {tab === 'threshold' && isStaff && (

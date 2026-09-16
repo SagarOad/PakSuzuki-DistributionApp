@@ -30,11 +30,18 @@ public class GetRetailersQueryHandler : IRequestHandler<GetRetailersQuery, Pagin
     {
         // Join distributors with IgnoreQueryFilters so soft-deleted (“ghost”) assignees still appear
         // as "(removed)" instead of vanishing from the list.
+        // Main list / "All" tab: anything still in the approval pipeline stays on /retailers/pending only.
         var query =
             from r in _context.Retailers.AsNoTracking()
             join d in _context.Distributors.IgnoreQueryFilters().AsNoTracking()
                 on r.DistributorId equals d.Id
             where request.DistributorScope == null || r.DistributorId == request.DistributorScope
+            where !(
+                r.DistributorApprovalStatus == ApprovalStatus.PendingReview
+                || r.DistributorApprovalStatus == ApprovalStatus.SentBackForCorrection
+                || (r.DistributorApprovalStatus == ApprovalStatus.Approved
+                    && (r.SuperAdminApprovalStatus == ApprovalStatus.PendingReview
+                        || r.SuperAdminApprovalStatus == ApprovalStatus.SentBackForCorrection)))
             where request.Search == null
                 || r.Name.Contains(request.Search)
                 || r.BusinessName.Contains(request.Search)

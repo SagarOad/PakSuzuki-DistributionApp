@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { NavLink, Outlet, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Truck, Package, ShoppingBasket,
-  UsersRound, LogOut, CircleEllipsis, Image, FileBarChart2, Settings, Gift,
+  LogOut, CircleEllipsis, Image, FileBarChart2, Settings, Gift,
   Home, Droplets, ClipboardList, ShoppingCart, FilePlus2
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
@@ -19,8 +19,7 @@ const staffNavItems = [
   { to: '/distributors', label: 'Distributors', icon: Truck, roles: ['SuperAdmin', 'Admin'] },
   { to: '/retailers', label: 'Retailers', icon: Package, roles: ['SuperAdmin', 'Admin'] },
   { to: '/products', label: 'Products', icon: Droplets, roles: ['SuperAdmin', 'Admin'] },
-  { to: '/orders', label: 'Orders', icon: ShoppingBasket, roles: ['SuperAdmin', 'Admin', 'RegionalHead'] },
-  { to: '/claims', label: 'Claims', icon: UsersRound, roles: ['SuperAdmin', 'Admin'] }
+  { to: '/orders', label: 'Orders', icon: ShoppingBasket, roles: ['SuperAdmin', 'Admin', 'RegionalHead'] }
 ]
 
 const distributorNavItems = [
@@ -42,13 +41,12 @@ const staffMoreLinks = [
   { to: '/reports', label: 'Reports', icon: FileBarChart2, roles: ['SuperAdmin', 'Admin'] },
   { to: '/settings', label: 'Settings', icon: Settings, roles: ['SuperAdmin', 'Admin'] },
   { to: '/incentive-schemes', label: 'Incentive schemes', icon: Gift, roles: ['SuperAdmin', 'Admin'] },
-  { to: '/incentives', label: 'Legacy incentives', icon: Gift, roles: ['SuperAdmin', 'Admin'] },
   { to: '/orders/middleware', label: 'SAP Queue', icon: ClipboardList, roles: ['SuperAdmin', 'Admin'] }
 ]
 
 const distributorMoreLinks = [
   { to: '/retailers', label: 'My Retailers', icon: Package },
-  { to: '/incentives', label: 'Incentives', icon: Gift },
+  { to: '/reports', label: 'Reports', icon: FileBarChart2 },
   { to: '/settings', label: 'Settings', icon: Settings }
 ]
 
